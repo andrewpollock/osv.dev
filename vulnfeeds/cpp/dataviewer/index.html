@@ -1,15 +1,44 @@
 <!DOCTYPE html>
-<meta charset="utf-8">
-<title>CVE Conversion Data Viewer</title>
-<p>
-    <iframe title="CVE Record Selector" name="record_selector" src="cve_selector.html"
-        width="100%"></iframe><!-- e.g. CVE-2023-35862 -->
-</p>
-<iframe title="The NVD source record" name="nvd_source"
-    width="25%"></iframe><!-- e.g. https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2023-35862 -->
-<iframe title="The VersionInfo input to combine-to-osv" name="conversion_input"
-    width="25%"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/CVE-2023-35862.nvd.json -->
-<iframe title="The OSV record input to OSV.dev importer" name="osv_input"
-    width="25%"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/CVE-2023-35862.json -->
-<iframe title="The resultant OSV record in OSV.dev" name="osv_output"
-    width="25%"></iframe><!-- e.g. https://api.test.osv.dev/v1/vulns/CVE-2023-35862 -->
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>CVE Conversion Data Viewer</title>
+    <style>
+        section {
+            display: flex;
+            flex-flow: column wrap;
+            flex: 200px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Andy's Handy Dandy CVE Conversion Inspector</h1>
+        <p>
+            <iframe title="CVE Record Selector" name="record_selector" src="cve_selector.html"
+                width="100%"></iframe><!-- e.g. CVE-2023-35862 -->
+        </p>
+    </header>
+    <section>
+        <article>
+            <iframe title="The NVD source record" name="nvd_source"
+                width="25%"></iframe><!-- e.g. https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2023-35862 -->
+        </article>
+        <article>
+            <iframe title="The VersionInfo input to combine-to-osv" name="conversion_input"
+                width="25%"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/CVE-2023-35862.nvd.json -->
+            <article>
+                <article>
+                    <iframe title="The OSV record input to OSV.dev importer" name="osv_input"
+                        width="25%"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/CVE-2023-35862.json -->
+                </article>
+                <article>
+                    <iframe title="The resultant OSV record in OSV.dev" name="osv_output"
+                        width="25%"></iframe><!-- e.g. https://api.test.osv.dev/v1/vulns/CVE-2023-35862 -->
+                </article>
+    </section>
+</body>
+
+</html>
