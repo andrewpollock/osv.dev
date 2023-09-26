@@ -5,9 +5,11 @@
     <meta charset="utf-8">
     <title>CVE Conversion Data Viewer</title>
     <style>
-        html, body {
+        html,
+        body {
             height: 100%;
         }
+
         section {
             display: flex;
         }
@@ -65,18 +67,22 @@
     </header>
     <section>
         <article>
+            The NVD source record
             <iframe title="The NVD source record"
                 name="nvd_source"></iframe><!-- e.g. https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2023-35862 -->
         </article>
         <article>
+            <code>VersionInfo</code> JSON struct input to <code>combine-to-osv</code>
             <iframe title="The VersionInfo input to combine-to-osv"
                 name="conversion_input"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/CVE-2023-35862.nvd.json -->
         </article>
         <article>
+            The OSV record input to OSV.dev importer
             <iframe title="The OSV record input to OSV.dev importer"
                 name="osv_input"></iframe><!-- e.g. https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/CVE-2023-35862.json -->
         </article>
         <article>
+            The resultant OSV record in OSV.dev (according to the API)
             <iframe title="The resultant OSV record in OSV.dev"
                 name="osv_output"></iframe><!-- e.g. https://api.test.osv.dev/v1/vulns/CVE-2023-35862 -->
         </article>
