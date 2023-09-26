@@ -6,6 +6,10 @@
     <script type="text/javascript">
         function updateCve() {
             let CVE = document.getElementsByName("CVEID")[0].value;
+
+            document.getElementsByName("conversion_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
+            document.getElementsByName("osv_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+            document.getElementsByName("osv_output")[0].src = "https://api.test.osv.dev/v1/vulns/" + CVEID;
         }
     </script>
 </head>
