@@ -1,11 +1,25 @@
 <!DOCTYPE html>
-<meta charset="utf-8">
-<form>
-    <p>
-        CVE ID: <input type="text" name="CVEID">
-    </p>
-    <p>
-        Staging <input type="radio" name="environment" value="staging" checked>
-        Production <input type="radio" name="environment" value="production">
-    </p>
-</form>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <script type="text/javascript">
+        function updateCve() {
+            alert(document.getElementsByName("CVEID")[0].value);
+        }
+    </script>
+</head>
+
+<body>
+    <form name="cve_selector" onchange="updateCve()">
+        <p>
+            CVE ID: <input type="text" name="CVEID">
+        </p>
+        <p>
+            Staging <input type="radio" name="environment" value="staging" checked>
+            Production <input type="radio" name="environment" value="production">
+        </p>
+    </form>
+</body>
+
+</html>
