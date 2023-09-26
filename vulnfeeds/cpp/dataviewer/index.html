@@ -14,14 +14,30 @@
             flex: 200px;
         }
     </style>
+    <script type="text/javascript">
+        function updateCve() {
+            let CVE = document.getElementsByName("CVEID")[0].value;
+
+            document.getElementsByName("conversion_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
+            document.getElementsByName("osv_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+            document.getElementsByName("osv_output")[0].src = "https://api.test.osv.dev/v1/vulns/" + CVEID;
+        }
+    </script>
 </head>
 
 <body>
     <header>
         <h1>Andy's Handy Dandy CVE Conversion Inspector</h1>
         <p>
-            <iframe title="CVE Record Selector" name="record_selector" src="cve_selector.html"
-                width="100%"></iframe><!-- e.g. CVE-2023-35862 -->
+        <form name="cve_selector" onchange="updateCve()">
+            <p>
+                CVE ID: <input type="text" name="CVEID">
+            </p>
+            <p>
+                Staging <input type="radio" name="environment" value="staging" checked>
+                Production <input type="radio" name="environment" value="production">
+            </p>
+        </form>
         </p>
     </header>
     <section>
