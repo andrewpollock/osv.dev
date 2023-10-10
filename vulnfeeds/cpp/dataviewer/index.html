@@ -28,20 +28,20 @@
     </style>
     <script type="text/javascript">
         function updateCve() {
-            let CVEID = document.getElementsByName("CVEID")[0].value;
-            let environment = document.getElementsByName("environment")[0].value;
+            let CVEID = document.querySelector("input[name='CVEID']").value;
+            let environment = document.querySelector("input[name='environment']:checked").value;
 
-            document.getElementsByName("nvd_source")[0].src = "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=" + CVEID;
+            document.querySelector("iframe[name='nvd_source']").src = "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=" + CVEID;
             switch (environment) {
                 case "staging":
-                    document.getElementsByName("conversion_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
-                    document.getElementsByName("osv_input")[0].src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
-                    document.getElementsByName("osv_output")[0].src = "https://api.test.osv.dev/v1/vulns/" + CVEID;
+                    document.querySelector("iframe[name='conversion_input']").src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
+                    document.querySelector("iframe[name='osv_input']") = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+                    document.querySelector("iframe[name='osv_output']") = "https://api.test.osv.dev/v1/vulns/" + CVEID;
                     break;
                 case "production":
-                    document.getElementsByName("conversion_input")[0].src = "https://cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
-                    document.getElementsByName("osv_input")[0].src = "https://cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
-                    document.getElementsByName("osv_output")[0].src = "https://api.osv.dev/v1/vulns/" + CVEID;
+                    document.querySelector("iframe[name='conversion_input']").src = "https://cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
+                    document.querySelector("iframe[name='osv_input']") = "https://cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+                    document.querySelector("iframe[name='osv_output']") = "https://api.osv.dev/v1/vulns/" + CVEID;
                     break;
             }
         }
