@@ -35,13 +35,13 @@
             switch (environment) {
                 case "staging":
                     document.querySelector("iframe[name='conversion_input']").src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
-                    document.querySelector("iframe[name='osv_input']") = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
-                    document.querySelector("iframe[name='osv_output']") = "https://api.test.osv.dev/v1/vulns/" + CVEID;
+                    document.querySelector("iframe[name='osv_input']").src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+                    document.querySelector("iframe[name='osv_output']").src = "https://api.test.osv.dev/v1/vulns/" + CVEID;
                     break;
                 case "production":
                     document.querySelector("iframe[name='conversion_input']").src = "https://cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
-                    document.querySelector("iframe[name='osv_input']") = "https://cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
-                    document.querySelector("iframe[name='osv_output']") = "https://api.osv.dev/v1/vulns/" + CVEID;
+                    document.querySelector("iframe[name='osv_input']").src = "https://cve-osv-conversion.storage.googleapis.com/osv-output/" + CVEID + ".json";
+                    document.querySelector("iframe[name='osv_output']").src = "https://api.osv.dev/v1/vulns/" + CVEID;
                     break;
             }
         }
