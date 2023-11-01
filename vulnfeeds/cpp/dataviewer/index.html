@@ -63,19 +63,38 @@
 <body>
     <header>
         <h1>Andy's Handy Dandy CVE Conversion Inspector</h1>
-        <p>
-        <form name="cve_selector" onchange="updateCve()">
-            <p>
-                CVE ID: <input type="text" name="CVEID">
-            </p>
-            <p>
-                <input type="radio" name="environment" value="staging" checked> Staging
-            </p>
-            <p>
-                <input type="radio" name="environment" value="production"> Production
-            </p>
-        </form>
-        </p>
+        <table>
+            <tr>
+                <td>
+                    <form name="cve_selector" onchange="updateCve()">
+                        <p>
+                            CVE ID: <input type="text" name="CVEID">
+                        </p>
+                        <p>
+                            <input type="radio" name="environment" value="staging" checked> Staging
+                        </p>
+                        <p>
+                            <input type="radio" name="environment" value="production"> Production
+                        </p>
+                    </form>
+                </td>
+                <td>
+                    <b>Andy's hot tips for best results:</b>
+                    <ul>
+                        <li>Install <a
+                                href="https://chrome.google.com/webstore/detail/gifgpciglhhpmeefjdmlpboipkibhbjg">&lt;/&gt;iFrame
+                                Allow</a> (optionally configuring it to only operate on
+                            <tt>https://andrewpollock.github.io/*</tt> and <tt>https://services.nvd.nist.gov/*</tt>)
+                        </li>
+                        <li>Install <a
+                                href="https://chrome.google.com/webstore/detail/bcjindcccaagfpapjjmafapmmgkkhgoa">JSON
+                                Formatter</a>
+                            (maybe once <a href="https://github.com/callumlocke/json-formatter/pull/259">#259</a> is
+                            merged it'll do the right thing in iframes as well)</li>
+                    </ul>
+                </td>
+            </tr>
+        </table>
     </header>
     <section>
         <article>
