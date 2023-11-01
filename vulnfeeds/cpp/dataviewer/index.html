@@ -41,6 +41,7 @@
             let environment = document.querySelector("input[name='environment']:checked").value;
 
             document.querySelector("iframe[name='nvd_source']").src = "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=" + CVEID;
+            document.querySelector('p[name="nvd_source"]').innerHTML = '<a href="' + document.querySelector('iframe[name="nvd_source"').src + '" target="_blank" rel="noopener noreferrer">' + document.querySelector("input[name='CVEID']").value + '</a> in the NVD'
             switch (environment) {
                 case "staging":
                     document.querySelector("iframe[name='conversion_input']").src = "https://osv-test-cve-osv-conversion.storage.googleapis.com/parts/nvd/" + CVEID + ".nvd.json";
@@ -53,6 +54,9 @@
                     document.querySelector("iframe[name='osv_output']").src = "https://api.osv.dev/v1/vulns/" + CVEID;
                     break;
             }
+            document.querySelector('p[name="conversion_input"]').innerHTML = '<a href="' + document.querySelector('iframe[name="conversion_input" target="_blank" rel="noopener noreferrer"').src + '">Input to <tt>combine-to-osv</tt></a>'
+            document.querySelector('p[name="osv_input"]').innerHTML = '<a href="' + document.querySelector('iframe[name="osv_input" target="_blank" rel="noopener noreferrer"').src + '">Input to OSV importer</tt></a>'
+            document.querySelector('p[name="osv_output"]').innerHTML = '<a href="' + document.querySelector('iframe[name="osv_output" target="_blank" rel="noopener noreferrer"').src + '">Record in OSV.dev</a>'
         }
     </script>
 </head>
@@ -76,15 +80,19 @@
     </header>
     <section>
         <article>
+            <p name="nvd_source"></p>
             <iframe title="The NVD source record" name="nvd_source"></iframe>
         </article>
         <article>
+            <p name="conversion_input"></p>
             <iframe title="The VersionInfo input to combine-to-osv" name="conversion_input"></iframe>
         </article>
         <article>
+            <p name="osv_input"></p>
             <iframe title="The OSV record input to OSV.dev importer" name="osv_input"></iframe>
         </article>
         <article>
+            <p name="osv_output"></p>
             <iframe title="The resultant OSV record in OSV.dev" name="osv_output"></iframe>
         </article>
     </section>
