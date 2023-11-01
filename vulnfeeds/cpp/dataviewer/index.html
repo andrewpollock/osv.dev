@@ -8,20 +8,29 @@
         html,
         body {
             height: 100%;
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            margin-top: 0;
+            display: flex;
+            flex-direction: column;
         }
 
         section {
             display: flex;
+            flex: 1;
         }
 
         article {
-            display: flex;
             flex-flow: row wrap;
             flex: 1;
         }
 
         iframe {
             display: flex;
+            height: 100%;
             width: 100%;
             flex: 1;
         }
@@ -67,24 +76,16 @@
     </header>
     <section>
         <article>
-            <p>
-                <iframe title="The NVD source record" name="nvd_source"></iframe>
-            </p>
+            <iframe title="The NVD source record" name="nvd_source"></iframe>
         </article>
         <article>
-            <p>
-                <iframe title="The VersionInfo input to combine-to-osv" name="conversion_input"></iframe>
-            </p>
+            <iframe title="The VersionInfo input to combine-to-osv" name="conversion_input"></iframe>
         </article>
         <article>
-            <p>
-                <iframe title="The OSV record input to OSV.dev importer" name="osv_input"></iframe>
-            </p>
+            <iframe title="The OSV record input to OSV.dev importer" name="osv_input"></iframe>
         </article>
         <article>
-            <p>
-                <iframe title="The resultant OSV record in OSV.dev" name="osv_output"></iframe>
-            </p>
+            <iframe title="The resultant OSV record in OSV.dev" name="osv_output"></iframe>
         </article>
     </section>
 </body>
