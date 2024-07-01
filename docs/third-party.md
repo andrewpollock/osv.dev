@@ -13,6 +13,7 @@ tools and unsupported by the core OSV maintainers.
     IaC)](https://github.com/marcinguy/betterscan-ce)
 -   [bomber](https://github.com/devops-kung-fu/bomber)
 -   [Cortex XSOAR](https://github.com/demisto/content)
+-   [dependency-management-data](https://dmd.tanna.dev)
 -   [Dependency-Track](https://github.com/DependencyTrack/dependency-track)
 -   [dep-scan](https://github.com/AppThreat/dep-scan)
 -   [EZE-CLI: The one stop shop for security testing in modern development](https://github.com/RiverSafeUK/eze-cli)
@@ -25,9 +26,11 @@ tools and unsupported by the core OSV maintainers.
 -   [Packj](https://github.com/ossillate-inc/packj)
 -   [pip-audit](https://pypi.org/project/pip-audit/)
 -   [Renovate](https://github.com/renovatebot/renovate)
+-   [rosv: an R package to access the OSV database and help administer Posit Package Manager](https://github.com/al-obrien/rosv)
 -   [Rust client library](https://github.com/gcmurphy/osv)
 -   [Skjold: Security audit python project dependencies against several security
     advisory databases](https://github.com/twu/skjold)
 -   [Trivy](https://github.com/aquasecurity/trivy)
+-   [IronDome: SCA scanner for Ruby applications](https://rubygems.org/gems/iron_dome)
 
 Feel free to [send a PR](https://github.com/google/osv.dev/blob/master/docs/third-party.md) to add your project here.

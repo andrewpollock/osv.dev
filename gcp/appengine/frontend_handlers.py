@@ -17,18 +17,21 @@ import json
 import os
 import math
 import re
+import logging
 
 from flask import abort
 from flask import current_app
 from flask import Blueprint
 from flask import make_response
 from flask import redirect
-from flask import render_template
+from flask import render_template, render_template_string
 from flask import request
 from flask import url_for
 from flask import send_from_directory
-from werkzeug.utils import safe_join
+from werkzeug.security import safe_join
+from werkzeug import exceptions
 from google.cloud import ndb
+from cvss import CVSS2, CVSS3, CVSS4
 
 import markdown2
 from urllib import parse
@@ -44,10 +47,11 @@ blueprint = Blueprint('frontend_handlers', __name__)
 _PAGE_SIZE = 16
 _PAGE_LOOKAHEAD = 4
 _REQUESTS_PER_MIN = 30
-_WORD_CHARACTERS_OR_DASH = re.compile(r'^[\w-]+$')
+_WORD_CHARACTERS_OR_DASH = re.compile(r'^[+\w-]+$')
 _VALID_BLOG_NAME = _WORD_CHARACTERS_OR_DASH
 _VALID_VULN_ID = _WORD_CHARACTERS_OR_DASH
 _BLOG_CONTENTS_DIR = 'blog'
+_DEPS_BASE_URL = 'https://deps.dev'
 
 if utils.is_prod():
   redis_host = os.environ.get('REDISHOST', 'localhost')
@@ -113,6 +117,13 @@ def index():
       'home.html', ecosystem_counts=osv_get_ecosystem_counts_cached())
 
 
+@blueprint.route('/robots.txt')
+def robots():
+  response = make_response(f'Sitemap: {request.host_url}sitemap_index.xml\n')
+  response.mimetype = 'text/plain'
+  return response
+
+
 @blueprint.route('/blog/', strict_slashes=False)
 def blog():
   return render_template('blog.html', index=_load_blog_content('index.html'))
@@ -167,22 +178,40 @@ def docs():
   return redirect('https://google.github.io/osv.dev')
 
 
+@blueprint.route('/ecosystems')
+def ecosystems():
+  return redirect('https://osv-vulnerabilities.storage.googleapis.com/ecosystems.txt')  # pylint: disable=line-too-long
+
+
+_LIST_ARGS = ['q', 'ecosystem', 'page']
+
+
 @blueprint.route('/list')
 def list_vulnerabilities():
   """Main page."""
-  is_turbo_frame = request.headers.get('Turbo-Frame')
+
+  # Remove unknown query parameters
+  args = {k: v for k, v in request.args.lists() if k in _LIST_ARGS}
 
   # Remove page parameter if not from turbo frame
-  if not is_turbo_frame:
-    if request.args.get('page', 1) != 1:
-      q = parse.parse_qs(request.query_string)
-      q.pop(b'page', None)
-      return redirect(
-          url_for(request.endpoint) + '?' + parse.urlencode(q, True))
+  is_turbo_frame = request.headers.get('Turbo-Frame')
+  if not is_turbo_frame and args.get('page', 1) != 1:
+    args.pop('page', None)
+
+  # redirect if any query parameters were filtered
+  if args.keys() != request.args.keys():
+    return redirect(url_for(request.endpoint, **args))
 
   query = request.args.get('q', '')
+  # Remove leading and trailing spaces
+  query = query.strip()
   page = int(request.args.get('page', 1))
   ecosystem = request.args.get('ecosystem')
+
+  if page < 0:
+    args.pop('page', None)
+    return redirect(url_for(request.endpoint, **args))
+
   results = osv_query(query, page, False, ecosystem)
 
   # Fetch ecosystems by default. As an optimization, skip when rendering page
@@ -204,7 +233,14 @@ def list_vulnerabilities():
 def vulnerability(vuln_id):
   """Vulnerability page."""
   vuln = osv_get_by_id(vuln_id)
-  return render_template('vulnerability.html', vulnerability=vuln)
+
+  if utils.is_prod():
+    api_url = 'api.osv.dev'
+  else:
+    api_url = 'api.test.osv.dev'
+
+  return render_template(
+      'vulnerability.html', vulnerability=vuln, api_url=api_url)
 
 
 @blueprint.route('/<potential_vuln_id>')
@@ -222,25 +258,86 @@ def vulnerability_redirector(potential_vuln_id):
   return None
 
 
+@blueprint.route('/<potential_vuln_id>.json')
+@blueprint.route('/vulnerability/<potential_vuln_id>.json')
+def vulnerability_json_redirector(potential_vuln_id):
+  """Convenience redirector for /VULN-ID.json and /vulnerability/VULN-ID.json to
+  https://api.osv.dev/v1/vulns/VULN-ID.
+  """
+  if not _VALID_VULN_ID.match(potential_vuln_id):
+    abort(404)
+    return None
+
+  vuln = osv_get_by_id(potential_vuln_id)
+  if not vuln:
+    abort(404)
+    return None
+
+  if utils.is_prod():
+    api_url = 'api.osv.dev'
+  else:
+    api_url = 'api.test.osv.dev'
+  return redirect(f'https://{api_url}/v1/vulns/{potential_vuln_id}')
+
+
 def bug_to_response(bug, detailed=True):
   """Convert a Bug entity to a response object."""
-  response = osv.vulnerability_to_dict(bug.to_vulnerability())
+  response = osv.vulnerability_to_dict(
+      bug.to_vulnerability(include_alias=detailed))
   response.update({
       'isFixed': bug.is_fixed,
       'invalid': bug.status == osv.BugStatus.INVALID
   })
 
+  add_cvss_score(response)
+
   if detailed:
     add_links(response)
     add_source_info(bug, response)
-    add_related_aliases(bug, response)
   return response
+
+
+def calculate_severity_details(
+    severity: dict) -> tuple[float | None, str | None]:
+  """Calculate score and rating of severity"""
+  cvss_calculator = {
+      'CVSS_V2': CVSS2,
+      'CVSS_V3': CVSS3,
+      'CVSS_V4': CVSS4,
+  }
+
+  type_ = severity.get('type')
+  score = severity.get('score')
+
+  if not (type_ and score):
+    return None, None
+
+  c = cvss_calculator[type_](score)
+  severity_rating = c.severities()[0]
+  severity_score = c.base_score
+  return severity_score, severity_rating
+
+
+def add_cvss_score(bug):
+  """Add severity score where possible."""
+  severity_score = None
+  severity_rating = None
+  severity_type = None
+
+  for severity in bug.get('severity', []):
+    type_ = severity.get('type')
+    if type_ and (not severity_type or type_ > severity_type):
+      severity_type = type_
+      severity_score, severity_rating = calculate_severity_details(severity)
+
+  bug['severity_score'] = severity_score
+  bug['severity_rating'] = severity_rating
 
 
 def add_links(bug):
   """Add VCS links where possible."""
 
-  repo_url = None
+  first_repo_url = None
 
   for entry in bug.get('affected', []):
     for i, affected_range in enumerate(entry.get('ranges', [])):
@@ -251,6 +348,9 @@ def add_links(bug):
       repo_url = affected_range.get('repo')
       if not repo_url:
         continue
+
+      if not first_repo_url:
+        first_repo_url = repo_url
 
       for event in affected_range.get('events', []):
         if event.get('introduced') and event['introduced'] != '0':
@@ -271,6 +371,9 @@ def add_links(bug):
           event['limit_link'] = _commit_to_link(repo_url, event['limit'])
           continue
 
+  if first_repo_url:
+    bug['repo'] = first_repo_url
+
 
 def add_source_info(bug, response):
   """Add source information to `response`."""
@@ -286,41 +389,10 @@ def add_source_info(bug, response):
   response['source'] = source_repo.link + source_path
   response['source_link'] = response['source']
   if source_repo.human_link:
-    response['human_source_link'] = source_repo.human_link + bug.id()
-
-
-def add_related_aliases(bug: osv.Bug, response):
-  """Add links to other osv entries that's related through aliases"""
-  # Add links to other entries if they exist
-  aliases = {}
-  if bug.aliases:
-    directly_refed = osv.Bug.query(osv.Bug.db_id.IN(bug.aliases))
-    is_directly_refed = {dr.db_id for dr in directly_refed}
-    for alias in bug.aliases:
-      aliases[alias] = {
-          'exists': alias in is_directly_refed,
-          'same_alias_entries': []
-      }
-
-  # Add links to other entries that have the same alias or references this
-  query = osv.Bug.query(osv.Bug.aliases.IN(bug.aliases + [bug.id()]))
-  for other in query:
-    if other.id() == bug.id():
-      continue
-    for other_alias in other.aliases:
-      if other_alias in aliases:
-        aliases[other_alias]['same_alias_entries'].append(other.id())
-    if bug.id() in other.aliases:
-      aliases[other.id()] = {'exists': True, 'same_alias_entries': []}
-
-  # Remove self if it was added
-  aliases.pop(bug.id(), None)
-
-  response['aliases'] = [{
-      'alias_id': aid,
-      'exists': ex['exists'],
-      'same_alias_entries': ex['same_alias_entries']
-  } for aid, ex in aliases.items()]
+    bug_ecosystems = bug.ecosystem
+    bug_id = bug.id()
+    response['human_source_link'] = render_template_string(
+        source_repo.human_link, ECOSYSTEMS=bug_ecosystems, BUG_ID=bug_id)
 
 
 def _commit_to_link(repo_url, commit):
@@ -350,19 +422,26 @@ def osv_get_ecosystems():
                 key=str.lower)
 
 
-# TODO: Figure out how to skip cache when testing
-@cache.instance.cached(
-    timeout=24 * 60 * 60, key_prefix='osv_get_ecosystem_counts')
+@cache.smart_cache("osv_get_ecosystem_counts", timeout=24 * 60 * 60)
 def osv_get_ecosystem_counts_cached():
   """Get count of vulnerabilities per ecosystem, cached"""
+  # Check if we're already in ndb context, if not, put us in one
+  # We can sometimes not be in ndb context because caching
+  # runs in a separate thread
+  if ndb.get_context(raise_context_error=False) is None:
+    # IMPORTANT: Ensure this ndb.Client remains consistent
+    # with the one defined in main.py
+    with ndb.Client().context():
+      return osv_get_ecosystem_counts()
+
   return osv_get_ecosystem_counts()
 
 
 def osv_get_ecosystem_counts() -> dict[str, int]:
   """Get count of vulnerabilities per ecosystem."""
   counts = {}
-  ecosystems = osv_get_ecosystems()
-  for ecosystem in ecosystems:
+  ecosystem_names = osv_get_ecosystems()
+  for ecosystem in ecosystem_names:
     if ':' in ecosystem:
       # Count by the base ecosystem index. Otherwise we'll overcount as a
       # single entry may refer to multiple sub-ecosystems.
@@ -528,8 +607,13 @@ def sort_versions(versions: list[str], ecosystem: str) -> list[str]:
 def markdown(text):
   """Render markdown."""
   if text:
-    return markdown2.markdown(
+    md = markdown2.markdown(
         text, safe_mode='escape', extras=['fenced-code-blocks'])
+    # TODO(michaelkedar): Seems like there's a bug with markdown2 not escaping
+    # unclosed HTML comments <!--, which ends up commenting out the whole page
+    # See: https://github.com/trentm/python-markdown2/issues/563
+    # For now, manually replace any leftover comments with the escaped form
+    return md.replace('<!--', '&lt;!--')
 
   return ''
 
@@ -573,3 +657,80 @@ def package_in_ecosystem(package):
   if ecosystem in osv.ecosystems.package_urls:
     return osv.ecosystems.package_urls[ecosystem] + package['name']
   return ''
+
+
+@blueprint.app_template_filter('osv_has_vuln')
+def osv_has_vuln(vuln_id):
+  """Checks if an osv vulnerability exists for the given ID."""
+  return osv.Bug.get_by_id(vuln_id)
+
+
+@blueprint.app_template_filter('list_packages')
+def list_packages(vuln_affected: list[dict]):
+  """Lists all affected package names without duplicates,
+  remaining in the original order."""
+  packages = []
+
+  for affected in vuln_affected:
+    for affected_range in affected.get('ranges', []):
+      if affected_range['type'] in ['ECOSYSTEM', 'SEMVER']:
+        if 'package' not in affected:
+          continue
+        package_entry = affected['package']['ecosystem'] + '/' + affected[
+            'package']['name']
+        if package_entry not in packages:
+          packages.append(package_entry)
+      elif affected_range['type'] == 'GIT':
+        parsed_scheme = strip_scheme(affected_range['repo'])
+        if parsed_scheme not in packages:
+          packages.append(parsed_scheme)
+
+  return packages
+
+
+@blueprint.app_errorhandler(404)
+def not_found_error(error: exceptions.HTTPException):
+  logging.info('Handled %s - Path attempted: %s', error, request.path)
+  return render_template('404.html'), 404
+
+
+@blueprint.app_template_filter('has_link_to_deps_dev')
+def has_link_to_deps_dev(ecosystem):
+  """
+  Check if a given ecosystem has a corresponding link in deps.dev.
+
+  Returns:
+      bool: True if the ecosystem has a corresponding link in deps.dev,
+            False otherwise.
+  """
+  return osv.ecosystems.is_supported_in_deps_dev(ecosystem)
+
+
+@blueprint.app_template_filter('link_to_deps_dev')
+def link_to_deps_dev(package, ecosystem):
+  """
+  Generate a link to the deps.dev page for a given package in the specified
+  ecosystem.
+
+  Args:
+      package (str): The name of the package.
+      ecosystem (str): The ecosystem name.
+  Returns:
+      str or None: The URL to the deps.dev page for the package if the
+      ecosystem is supported, None otherwise.
+  """
+  system = osv.ecosystems.map_ecosystem_to_deps_dev(ecosystem)
+  if not system:
+    return None
+  # This ensures that special characters such as / are properly encoded,
+  # preventing invalid paths and 404 errors.
+  # e.g. for the package name github.com/rancher/wrangler,
+  # return https://deps.dev/go/github.com%2Francher%2Fwrangler
+  encoded_package = parse.quote(package, safe='')
+  return f"{_DEPS_BASE_URL}/{system}/{encoded_package}"
+
+
+@blueprint.app_template_filter('relative_time')
+def relative_time(timestamp: str) -> str:
+  """Convert the input to a human-readable relative time."""
+  return utils.relative_time(timestamp)

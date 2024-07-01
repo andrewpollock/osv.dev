@@ -5,3 +5,6 @@ __pycache__/
 build/lib
 .vscode
 *.tfstate*
+.history/*
+**/.history/*
+*/datastore-helper/

@@ -8,7 +8,7 @@ on:
     branches: [ master ]
 
 # Declare default permissions as read only.
-permissions: read-all
+permissions: {}
 
 jobs:
   analysis:
@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: "Run analysis"
-        uses: ossf/scorecard-action@08b4669551908b1024bb425080c797723083c031 # v2.2.0
+        uses: ossf/scorecard-action@dc50aa9510b46c811795eb24b2f1ba02a914e534 # v2.3.3
         with:
           results_file: results.sarif
           results_format: sarif
@@ -50,6 +50,6 @@ jobs:
 
       # Upload the results to GitHub's code scanning dashboard.
       - name: "Upload to code-scanning"
-        uses: github/codeql-action/upload-sarif@00e563ead9f72a8461b24876bee2d0c2e8bd2ee8 # v2.21.5
+        uses: github/codeql-action/upload-sarif@6ac9fc7e8e290bda8fac86290b68e176def71959 # v2.25.8
         with:
           sarif_file: results.sarif

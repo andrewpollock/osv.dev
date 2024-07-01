@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/google/osv/vulnfeeds/cves"
 	"github.com/google/osv/vulnfeeds/utility"
@@ -42,13 +43,31 @@ func main() {
 	}
 
 	allCves := loadAllCVEs(*cvePath)
-	allParts := loadParts(*partsInputPath)
-	combinedData := combineIntoOSV(allCves, allParts, *cveListPath)
+	allParts, cveModifiedMap := loadParts(*partsInputPath)
+	combinedData := combineIntoOSV(allCves, allParts, *cveListPath, cveModifiedMap)
 	writeOSVFile(combinedData, *osvOutputPath)
 }
 
+// getModifiedTime gets the modification time of a given file
+// This function assumes that the modified time on disk matches with it in GCS
+func getModifiedTime(filePath string) (time.Time, error) {
+	var emptyTime time.Time
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return emptyTime, err
+	}
+	parsedTime := fileInfo.ModTime()
+
+	return parsedTime, err
+}
+
 // loadInnerParts loads second level folder for the loadParts function
-func loadInnerParts(innerPartInputPath string, output map[string][]vulns.PackageInfo) {
+//
+// Parameters:
+//   - innerPartInputPath: The inner part path, such as "parts/alpine"
+//   - output: A map to store all PackageInfos for each CVE ID
+//   - cvePartsModifiedTime: A map tracking the latest modification time of each CVE part files
+func loadInnerParts(innerPartInputPath string, output map[cves.CVEID][]vulns.PackageInfo, cvePartsModifiedTime map[cves.CVEID]time.Time) {
 	dirInner, err := os.ReadDir(innerPartInputPath)
 	if err != nil {
 		Logger.Fatalf("Failed to read dir %q: %s", innerPartInputPath, err)
@@ -57,7 +76,8 @@ func loadInnerParts(innerPartInputPath string, output map[string][]vulns.Package
 		if !strings.HasSuffix(entryInner.Name(), ".json") {
 			continue
 		}
-		file, err := os.Open(path.Join(innerPartInputPath, entryInner.Name()))
+		filePath := path.Join(innerPartInputPath, entryInner.Name())
+		file, err := os.Open(filePath)
 		if err != nil {
 			Logger.Fatalf("Failed to open PackageInfo JSON %q: %s", path.Join(innerPartInputPath, entryInner.Name()), err)
 		}
@@ -69,11 +89,22 @@ func loadInnerParts(innerPartInputPath string, output map[string][]vulns.Package
 		}
 
 		// Turns CVE-2022-12345.alpine.json into CVE-2022-12345
-		cveId := strings.Split(entryInner.Name(), ".")[0]
+		cveId := cves.CVEID(strings.Split(entryInner.Name(), ".")[0])
 		output[cveId] = append(output[cveId], pkgInfos...)
 
 		Logger.Infof(
 			"Loaded Item: %s", entryInner.Name())
+
+		// Updates the latest OSV parts modified time of each CVE
+		modifiedTime, err := getModifiedTime(filePath)
+		if err != nil {
+			Logger.Warnf("Failed to get modified time of %s: %s", filePath, err)
+			continue
+		}
+		existingDate, exists := cvePartsModifiedTime[cveId]
+		if !exists || modifiedTime.After(existingDate) {
+			cvePartsModifiedTime[cveId] = modifiedTime
+		}
 	}
 }
 
@@ -90,32 +121,34 @@ func loadInnerParts(innerPartInputPath string, output map[string][]vulns.Package
 //
 // ## Returns
 // A mapping of "CVE-ID": []<Affected Package Information>
-func loadParts(partsInputPath string) map[string][]vulns.PackageInfo {
+// A mapping of "CVE-ID": time.Time (the latest modified time of its part files)
+func loadParts(partsInputPath string) (map[cves.CVEID][]vulns.PackageInfo, map[cves.CVEID]time.Time) {
 	dir, err := os.ReadDir(partsInputPath)
 	if err != nil {
 		Logger.Fatalf("Failed to read dir %q: %s", partsInputPath, err)
 	}
-	output := map[string][]vulns.PackageInfo{}
+	output := map[cves.CVEID][]vulns.PackageInfo{}
+	cvePartsModifiedTime := make(map[cves.CVEID]time.Time)
 	for _, entry := range dir {
 		if !entry.IsDir() {
 			Logger.Warnf("Unexpected file entry %q in %s", entry.Name(), partsInputPath)
 			continue
 		}
 		// map is already a reference type, so no need to pass in a pointer
-		loadInnerParts(path.Join(partsInputPath, entry.Name()), output)
+		loadInnerParts(path.Join(partsInputPath, entry.Name()), output, cvePartsModifiedTime)
 	}
-	return output
+	return output, cvePartsModifiedTime
 }
 
 // combineIntoOSV creates OSV entry by combining loaded CVEs from NVD and PackageInfo information from security advisories.
-func combineIntoOSV(loadedCves map[string]cves.CVEItem, allParts map[string][]vulns.PackageInfo, cveList string) map[string]*vulns.Vulnerability {
+func combineIntoOSV(loadedCves map[cves.CVEID]cves.Vulnerability, allParts map[cves.CVEID][]vulns.PackageInfo, cveList string, cvePartsModifiedTime map[cves.CVEID]time.Time) map[cves.CVEID]*vulns.Vulnerability {
 	Logger.Infof("Begin writing OSV files")
-	convertedCves := map[string]*vulns.Vulnerability{}
+	convertedCves := map[cves.CVEID]*vulns.Vulnerability{}
 	for cveId, cve := range loadedCves {
 		if len(allParts[cveId]) == 0 {
 			continue
 		}
-		convertedCve, _ := vulns.FromCVE(cveId, cve)
+		convertedCve, _ := vulns.FromCVE(cveId, cve.CVE)
 		if len(cveList) > 0 {
 			// Best-effort attempt to mark a disputed CVE as withdrawn.
 			modified, err := vulns.CVEIsDisputed(convertedCve, cveList)
@@ -129,15 +162,19 @@ func combineIntoOSV(loadedCves map[string]cves.CVEItem, allParts map[string][]vu
 		for _, pkgInfo := range allParts[cveId] {
 			convertedCve.AddPkgInfo(pkgInfo)
 		}
+		cveModified, _ := time.Parse(time.RFC3339, convertedCve.Modified)
+		if cvePartsModifiedTime[cveId].After(cveModified) {
+			convertedCve.Modified = cvePartsModifiedTime[cveId].Format(time.RFC3339)
+		}
 		convertedCves[cveId] = convertedCve
 	}
 	return convertedCves
 }
 
 // writeOSVFile writes out the given osv objects into individual json files
-func writeOSVFile(osvData map[string]*vulns.Vulnerability, osvOutputPath string) {
+func writeOSVFile(osvData map[cves.CVEID]*vulns.Vulnerability, osvOutputPath string) {
 	for vId, osv := range osvData {
-		file, err := os.OpenFile(path.Join(osvOutputPath, vId+".json"), os.O_CREATE|os.O_RDWR, 0644)
+		file, err := os.OpenFile(path.Join(osvOutputPath, string(vId)+".json"), os.O_CREATE|os.O_RDWR, 0644)
 		if err != nil {
 			Logger.Fatalf("Failed to create/open file to write: %s", err)
 		}
@@ -154,13 +191,13 @@ func writeOSVFile(osvData map[string]*vulns.Vulnerability, osvOutputPath string)
 }
 
 // loadAllCVEs loads the downloaded CVE's from the NVD database into memory.
-func loadAllCVEs(cvePath string) map[string]cves.CVEItem {
+func loadAllCVEs(cvePath string) map[cves.CVEID]cves.Vulnerability {
 	dir, err := os.ReadDir(cvePath)
 	if err != nil {
 		Logger.Fatalf("Failed to read dir %s: %s", cvePath, err)
 	}
 
-	result := make(map[string]cves.CVEItem)
+	result := make(map[cves.CVEID]cves.Vulnerability)
 
 	for _, entry := range dir {
 		if !strings.HasSuffix(entry.Name(), ".json") {
@@ -170,14 +207,14 @@ func loadAllCVEs(cvePath string) map[string]cves.CVEItem {
 		if err != nil {
 			Logger.Fatalf("Failed to open CVE JSON %q: %s", path.Join(cvePath, entry.Name()), err)
 		}
-		var nvdcve cves.NVDCVE
+		var nvdcve cves.CVEAPIJSON20Schema
 		err = json.NewDecoder(file).Decode(&nvdcve)
 		if err != nil {
 			Logger.Fatalf("Failed to decode JSON in %q: %s", file.Name(), err)
 		}
 
-		for _, item := range nvdcve.CVEItems {
-			result[item.CVE.CVEDataMeta.ID] = item
+		for _, item := range nvdcve.Vulnerabilities {
+			result[item.CVE.ID] = item
 		}
 		Logger.Infof("Loaded CVE: %s", entry.Name())
 		file.Close()

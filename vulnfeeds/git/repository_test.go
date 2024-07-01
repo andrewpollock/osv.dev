@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/osv/vulnfeeds/cves"
 	"golang.org/x/exp/maps"
 )
 
@@ -181,6 +182,62 @@ func TestRepoTags(t *testing.T) {
 	}
 }
 
+func TestNormalizeRepoTag(t *testing.T) {
+	tests := []struct {
+		description    string
+		inputTag       string
+		repoName       string
+		expectedResult string
+		expectedOk     bool
+	}{
+		{
+			description:    "A tag that is perfectly fine just the way it is",
+			inputTag:       "1.2.3",
+			repoName:       "acme",
+			expectedResult: "1-2-3",
+			expectedOk:     true,
+		},
+		{
+			description:    "A tag with a reponame prepended",
+			inputTag:       "acme-2000",
+			repoName:       "acme",
+			expectedResult: "2000",
+			expectedOk:     true,
+		},
+		{
+			description:    "A tag with a reponame containing a number prepended",
+			inputTag:       "yui2-2000",
+			repoName:       "yui2",
+			expectedResult: "2000",
+			expectedOk:     true,
+		},
+		{
+			description:    "A tag with a reponame containing a number in the middle",
+			inputTag:       "hudson-yui2-2800",
+			repoName:       "yui2",
+			expectedResult: "2800",
+			expectedOk:     true,
+		},
+		{
+			description:    "A tag with a Java package name prefix",
+			inputTag:       "org.apache.sling.i18n-2.0.2",
+			repoName:       "sling-org-apache-sling-i18n",
+			expectedResult: "2-0-2",
+			expectedOk:     true,
+		},
+	}
+
+	for _, tc := range tests {
+		got, err := normalizeRepoTag(tc.inputTag, tc.repoName)
+		if err != nil && tc.expectedOk {
+			t.Errorf("test %q: normalizeRepoTag(%q, %q): %q unexpectedly failed: %+v", tc.description, tc.inputTag, tc.repoName, got, err)
+		}
+		if diff := cmp.Diff(got, tc.expectedResult); diff != "" {
+			t.Errorf("test %q: normalizeRepoTag(%q, %q) incorrect result: %s", tc.description, tc.inputTag, tc.repoName, diff)
+		}
+	}
+}
+
 func TestNormalizeRepoTags(t *testing.T) {
 	tests := []struct {
 		description  string
@@ -237,21 +294,46 @@ func TestValidRepo(t *testing.T) {
 			repoURL:        "https://github.com/torvalds/linux",
 			expectedResult: true,
 		},
-		{
-			description:    "Valid repository with a git:// protocol URL",
-			repoURL:        "git://git.infradead.org/mtd-utils.git",
-			expectedResult: true,
-		},
+		// Seems to be having an outage at 2024-06-19
+		// {
+		// 	description:    "Valid repository with a git:// protocol URL",
+		// 	repoURL:        "git://git.infradead.org/mtd-utils.git",
+		// 	expectedResult: true,
+		// },
 		{
 			description:    "Invalid repository",
 			repoURL:        "https://github.com/andrewpollock/mybogusrepo",
 			expectedResult: false,
 		},
+		{
+			description:    "Legitimate repository with no tags and two branches",
+			repoURL:        "https://github.com/202ecommerce/security-advisories",
+			expectedResult: false,
+		},
+		{
+			description:    "Legitimate repository with no tags and one branch",
+			repoURL:        "https://github.com/active-labs/Advisories",
+			expectedResult: false,
+		},
 	}
 	for _, tc := range tests {
-		got := ValidRepo(tc.repoURL)
+		// This tests against Internet hosts and may have intermittent failures.
+		got := ValidRepoAndHasUsableRefs(tc.repoURL)
 		if diff := cmp.Diff(got, tc.expectedResult); diff != "" {
 			t.Errorf("test %q: ValidRepo(%q) was incorrect: %s", tc.description, tc.repoURL, diff)
+			t.Logf("Confirm that %s is reachable with `git ls-remote %s`", tc.repoURL, tc.repoURL)
 		}
+	}
+}
+
+func TestInvalidRepos(t *testing.T) {
+	redundantRepos := []string{}
+	for _, repo := range cves.InvalidRepos {
+		if !ValidRepoAndHasUsableRefs(repo) {
+			redundantRepos = append(redundantRepos, repo)
+		}
+	}
+	if diff := cmp.Diff([]string{}, redundantRepos); diff != "" {
+		t.Errorf("These redundant repos are in InvalidRepos: %s", diff)
 	}
 }

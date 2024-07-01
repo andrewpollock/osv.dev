@@ -22,6 +22,7 @@ import hashlib
 import functools
 import logging
 import os
+import threading
 import time
 from typing import Callable, List
 
@@ -36,6 +37,7 @@ from grpc_health.v1 import health_pb2
 from grpc_health.v1 import health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
 from packageurl import PackageURL
+from packaging.utils import canonicalize_version
 
 import osv
 from osv import ecosystems
@@ -66,6 +68,24 @@ _DETERMINE_VER_MIN_SCORE_CUTOFF = 0.05
 # This should match the number in the indexer
 _BUCKET_SIZE = 512
 
+# This needs to be kept in sync with
+# https://github.com/google/osv.dev/blob/
+# 666a43e6ae7690fbfa283e9a6f0b08a986be4d32/
+# docker/indexer/stages/processing/processing.go#L77
+_VENDORED_LIB_NAMES = frozenset((
+    '3rdparty',
+    'dep',
+    'deps',
+    'thirdparty',
+    'third-party',
+    'third_party',
+    'libs',
+    'external',
+    'externals',
+    'vendor',
+    'vendored',
+))
+
 # Prefix for the
 _TAG_PREFIX = "refs/tags/"
 
@@ -83,11 +103,55 @@ def ndb_context(func):
   return wrapper
 
 
+class LogTraceFilter:
+  """Class for adding the trace information from the grpc requests into logs."""
+
+  def __init__(self):
+    self.thread_local = threading.local()
+
+  def log_trace(self, func):
+    """Wrapper for grpc method to capture trace from header metadata"""
+
+    @functools.wraps(func)
+    def wrapper(s, r, context: grpc.ServicerContext):
+      self.thread_local.trace = dict(
+          context.invocation_metadata()).get('x-cloud-trace-context')
+      return func(s, r, context)
+
+    return wrapper
+
+  def filter(self, record: logging.LogRecord) -> bool:
+    """logging.Filter method to add trace into log data."""
+    trace = getattr(self.thread_local, 'trace', None)
+    if not trace:
+      return True
+
+    # Trace context header example:
+    # "X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=TRACE_TRUE"
+    parts = trace.split('/')
+    trace_id = parts[0]
+    # We don't set the GOOGLE_CLOUD_PROJECT env var explicitly, and I can't find
+    # any confirmation on whether Cloud Run will set automatically.
+    # Grab the project name from the (undocumented?) field on ndb.Client().
+    # Most correct way to do this would be to use the instance metadata server
+    # https://cloud.google.com/run/docs/container-contract#metadata-server
+    project = getattr(_ndb_client, 'project', 'oss-vdb')  # fall back to oss-vdb
+    record.trace = f'projects/{project}/traces/{trace_id}'
+    if len(parts) > 1:
+      record.span_id = parts[1].split(';')[0]
+
+    return True
+
+
+trace_filter = LogTraceFilter()
+
+
 class OSVServicer(osv_service_v1_pb2_grpc.OSVServicer,
                   health_pb2_grpc.HealthServicer):
   """V1 OSV servicer."""
 
   @ndb_context
+  @trace_filter.log_trace
   def GetVulnById(self, request, context: grpc.ServicerContext):
     """Return a `Vulnerability` object for a given OSV ID."""
     bug: osv.Bug = osv.Bug.get_by_id(request.id)
@@ -99,14 +163,33 @@ class OSVServicer(osv_service_v1_pb2_grpc.OSVServicer,
       context.abort(grpc.StatusCode.PERMISSION_DENIED, 'Permission denied.')
       return None
 
-    return bug_to_response(bug)
+    return bug_to_response(bug, include_alias=True)
 
   @ndb_context
+  @trace_filter.log_trace
   def QueryAffected(self, request, context: grpc.ServicerContext):
     """Query vulnerabilities for a particular project at a given commit or
 
     version.
     """
+    # Log some information about the query with structured logging
+    qtype, ecosystem, versioned = query_info(request.query)
+    if ecosystem is not None:
+      logging.info(
+          'QueryAffected for %s "%s"',
+          qtype,
+          ecosystem,
+          extra={
+              'json_fields': {
+                  'details': {
+                      'ecosystem': ecosystem,
+                      'versioned': versioned == 'versioned'
+                  }
+              }
+          })
+    else:
+      logging.info('QueryAffected for %s', qtype)
+
     page_token = None
     if request.query.page_token:
       try:
@@ -139,10 +222,55 @@ class OSVServicer(osv_service_v1_pb2_grpc.OSVServicer,
     return None
 
   @ndb_context
+  @trace_filter.log_trace
   def QueryAffectedBatch(self, request, context: grpc.ServicerContext):
     """Query vulnerabilities (batch)."""
     batch_results = []
     futures = []
+
+    # Log some information about the query with structured logging e.g.
+    # "message": "QueryAffectedBatch with 15 queries",
+    # "details": {
+    #   "commit": 1,
+    #   "ecosystem": {
+    #     "PyPI": {
+    #       "versioned": 4,
+    #       "versionless": 5
+    #      },
+    #     "": {  // no ecosystem specified
+    #       "versioned": 1,
+    #     }
+    #   },
+    #   "purl": {
+    #     "golang": {  // purl type, not OSV ecosystem
+    #       "versionless": 1
+    #     }
+    #   }
+    #   "invalid": 2
+    # }
+    # Fields are not included if the value is empty/0
+    query_details = {
+        'commit': 0,
+        'ecosystem': defaultdict(lambda: defaultdict(int)),
+        'purl': defaultdict(lambda: defaultdict(int)),
+        'invalid': 0,
+    }
+    for query in request.query.queries:
+      qtype, ecosystem, versioned = query_info(query)
+      if ecosystem is not None:
+        query_details[qtype][ecosystem][versioned] += 1
+      else:
+        query_details[qtype] += 1
+
+    # Filter out empty fields
+    query_details = {k: v for k, v in query_details.items() if v}
+
+    logging.info(
+        'QueryAffectedBatch with %d queries',
+        len(request.query.queries),
+        extra={'json_fields': {
+            'details': query_details
+        }})
 
     if len(request.query.queries) > _MAX_BATCH_QUERY:
       context.abort(grpc.StatusCode.INVALID_ARGUMENT, 'Too many queries.')
@@ -186,6 +314,7 @@ class OSVServicer(osv_service_v1_pb2_grpc.OSVServicer,
     return osv_service_v1_pb2.BatchVulnerabilityList(results=batch_results)
 
   @ndb_context
+  @trace_filter.log_trace
   def DetermineVersion(self, request, context: grpc.ServicerContext):
     """Determine the version of the provided hashes."""
     res = determine_version(request.query, context).result()
@@ -207,6 +336,38 @@ class OSVServicer(osv_service_v1_pb2_grpc.OSVServicer,
     """Health check per the gRPC health check protocol."""
     del request  # Unused.
     context.abort(grpc.StatusCode.UNIMPLEMENTED, "Unimplemented")
+
+
+def query_info(query) -> tuple[str, str, str]:
+  """Returns information about a query, for logging purposes.
+  First return value is one of 'commit', 'purl', 'ecosystem', 'invalid'.
+  If 'ecosystem' or 'purl', second two return values are the ecosystem name,
+  then 'versioned' or 'versionless' depending if the 'version' field is set.
+  Otherwise, last two return values are None.
+  """
+  if query.WhichOneof('param') == 'commit':
+    return 'commit', None, None
+  if not query.HasField('package'):
+    return 'invalid', None, None
+  if not query.package.purl and not query.package.name:
+    return 'invalid', None, None
+  qtype = 'ecosystem'
+  ecosystem = query.package.ecosystem
+  version = query.version
+  if query.package.purl:
+    try:
+      purl = PackageURL.from_string(query.package.purl)  # can raise ValueError
+      if query.package.ecosystem or query.package.name:
+        raise ValueError('purl and name/ecosystem cannot both be specified')
+      if purl.version and query.version:
+        raise ValueError('purl version and version cannot both be specified')
+      qtype = 'purl'
+      ecosystem = purl.type
+      version = purl.version or version
+    except ValueError:
+      return 'invalid', None, None
+
+  return qtype, ecosystem, 'versioned' if version else 'versionless'
 
 
 # Wrapped in a separate class
@@ -251,6 +412,20 @@ class QueryContext:
   total_responses: ResponsesCount
 
 
+def should_skip_bucket(path: str) -> bool:
+  """Returns whether or not the given file path should be skipped for the
+  determineversions bucket computation."""
+  if not path:
+    return False
+
+  # Check for a nested vendored directory, as this could mess with results. The
+  # API expects the file path passed to be relative to the potential library
+  # path, so any vendored library names found here would imply it's a nested
+  # vendored library.
+  components = path.split('/')
+  return any(c in _VENDORED_LIB_NAMES for c in components)
+
+
 def process_buckets(
     file_results: List[osv.FileResult]) -> List[osv.RepoIndexBucket]:
   """
@@ -260,6 +435,9 @@ def process_buckets(
   buckets: list[list[bytes]] = [[] for _ in range(_BUCKET_SIZE)]
 
   for fr in file_results:
+    if should_skip_bucket(fr.path):
+      continue
+
     buckets[int.from_bytes(fr.hash[:2], byteorder='big') % _BUCKET_SIZE].append(
         fr.hash)
 
@@ -455,14 +633,33 @@ def do_query(query, context: QueryContext, include_details=True):
   purl_version = None
   if purl_str:
     try:
-      parsed_purl = PackageURL.from_string(purl_str)
-      purl_version = parsed_purl.version
-      purl = parsed_purl
+      purl = PackageURL.from_string(purl_str)
+      purl_version = purl.version
     except ValueError:
       context.service_context.abort(grpc.StatusCode.INVALID_ARGUMENT,
                                     'Invalid Package URL.')
 
+  if purl and package_name:  # Purls already include the package name
+    context.service_context.abort(
+        grpc.StatusCode.INVALID_ARGUMENT,
+        'name specified in a purl query',
+    )
+  if purl and ecosystem:
+    # Purls already include the ecosystem inside
+    context.service_context.abort(
+        grpc.StatusCode.INVALID_ARGUMENT,
+        'ecosystem specified in a purl query',
+    )
+  if purl_version and query.WhichOneof('param') == 'version':
+    # version included both in purl and query
+    context.service_context.abort(
+        grpc.StatusCode.INVALID_ARGUMENT,
+        'version specified in params and purl query',
+    )
+
   def to_response(b):
+    # Skip retrieving aliases from to_vulnerability().
+    # Retrieve it asynchronously later.
     return bug_to_response(b, include_details)
 
   next_page_token = None
@@ -500,6 +697,32 @@ def do_query(query, context: QueryContext, include_details=True):
   else:
     context.service_context.abort(grpc.StatusCode.INVALID_ARGUMENT,
                                   'Invalid query.')
+    return None
+
+  # Asynchronously retrieve computed aliases and related ids here
+  # to prevent significant query time increase for packages with
+  # numerous vulnerabilities.
+  if include_details:
+    aliases = []
+    related = []
+    for bug in bugs:
+      aliases.append(osv.get_aliases_async(bug.id))
+      related.append(osv.get_related_async(bug.id))
+
+    for i, alias in enumerate(aliases):
+      alias_group = yield alias
+      if not alias_group:
+        continue
+      alias_ids = sorted(list(set(alias_group.bug_ids) - {bugs[i].id}))
+      bugs[i].aliases[:] = alias_ids
+      modified_time = bugs[i].modified.ToDatetime()
+      modified_time = max(alias_group.last_modified, modified_time)
+      bugs[i].modified.FromDatetime(modified_time)
+
+    for i, related_ids in enumerate(related):
+      related_bug_ids = yield related_ids
+      bugs[i].related[:] = sorted(
+          list(set(related_bug_ids + list(bugs[i].related))))
 
   if next_page_token:
     next_page_token = next_page_token.urlsafe()
@@ -508,10 +731,11 @@ def do_query(query, context: QueryContext, include_details=True):
   return bugs, next_page_token
 
 
-def bug_to_response(bug, include_details=True):
+def bug_to_response(bug, include_details=True, include_alias=False):
   """Convert a Bug entity to a response object."""
   if include_details:
-    return bug.to_vulnerability(include_source=True)
+    return bug.to_vulnerability(
+        include_source=True, include_alias=include_alias)
 
   return bug.to_vulnerability_minimal()
 
@@ -728,40 +952,54 @@ def _query_by_generic_version(
     version: str,
 ):
   """Query by generic version."""
-  # Try without normalizing.
-  results = []
-  query: ndb.Query = base_query.filter(osv.Bug.affected_fuzzy == version)
-  it: ndb.QueryIterator = query.iter(
-      # page_token can be the token for this query, or the token for the one
-      # below. If the token is used for the normalized query below, this query
-      # must have returned no results, so will still return no results, fall
-      # through to the query below again.
-      start_cursor=context.page_token)
-  cursor = None
 
-  while (yield it.has_next_async()):
-    if len(results) >= context.total_responses.page_limit():
-      cursor = it.cursor_after()
-      break
-    bug = it.next()
-    if _is_version_affected(bug.affected_packages, project, ecosystem, purl,
-                            version):
-      results.append(bug)
-      context.total_responses.add(1)
+  results = []
+
+  cursor = None
+  # Try without normalizing.
+  results, cursor = yield query_by_generic_helper(results, cursor, context,
+                                                  base_query, project,
+                                                  ecosystem, purl, version,
+                                                  False)
 
   if results:
     return results, cursor
 
+  # page_token can be the token for this query, or the token for the one
+  # below. If the token is used for the normalized query below, this query
+  # must have returned no results, so will still return no results, fall
+  # through to the query below again.
   # Try again after normalizing.
-  version = osv.normalize_tag(version)
-  query = base_query.filter(osv.Bug.affected_fuzzy == version)
-  it = query.iter(start_cursor=context.page_token)
+  results, cursor = yield query_by_generic_helper(results, cursor, context,
+                                                  base_query, project,
+                                                  ecosystem, purl,
+                                                  osv.normalize_tag(version),
+                                                  True)
 
+  if results:
+    return results, cursor
+
+  # Try again after canonicalizing + normalizing version.
+  results, cursor = yield query_by_generic_helper(results, cursor, context,
+                                                  base_query, project,
+                                                  ecosystem, purl,
+                                                  canonicalize_version(version),
+                                                  True)
+  return results, cursor
+
+
+@ndb.tasklet
+def query_by_generic_helper(results: list, cursor, context: QueryContext,
+                            base_query: ndb.Query, project: str, ecosystem: str,
+                            purl: PackageURL | None, version: str,
+                            is_normalized):
+  """Helper function for query_by_generic."""
+  query: ndb.Query = base_query.filter(osv.Bug.affected_fuzzy == version)
+  it: ndb.QueryIterator = query.iter(start_cursor=context.page_token)
   while (yield it.has_next_async()):
     if len(results) >= context.total_responses.page_limit():
       cursor = it.cursor_after()
       break
-
     bug = it.next()
     if _is_version_affected(
         bug.affected_packages,
@@ -769,10 +1007,9 @@ def _query_by_generic_version(
         ecosystem,
         purl,
         version,
-        normalize=True):
+        normalize=is_normalized):
       results.append(bug)
       context.total_responses.add(1)
-
   return results, cursor
 
 
@@ -806,12 +1043,6 @@ def query_by_version(context: QueryContext,
     query = query.filter(osv.Bug.ecosystem == ecosystem)
 
   if purl:
-    if ecosystem:  # Purl's already include the ecosystem inside
-      context.service_context.abort(
-          grpc.StatusCode.INVALID_ARGUMENT,
-          'Ecosystem specified in a purl query',
-      )
-
     purl_ecosystem = purl_helpers.purl_to_ecosystem(purl.type)
     if purl_ecosystem:
       ecosystem = purl_ecosystem
@@ -824,15 +1055,23 @@ def query_by_version(context: QueryContext,
   if ecosystem:
     if is_semver:
       # Ecosystem supports semver only.
-      bugs, next_page_token = yield _query_by_semver(context, query,
-                                                     package_name, ecosystem,
-                                                     purl, version)
+      bugs, _ = yield _query_by_semver(context, query, package_name, ecosystem,
+                                       purl, version)
+
+      new_bugs, _ = yield _query_by_generic_version(context, query,
+                                                    package_name, ecosystem,
+                                                    purl, version)
+      for bug in new_bugs:
+        if bug not in bugs:
+          bugs.append(bug)
+
     else:
       bugs, next_page_token = yield _query_by_generic_version(
           context, query, package_name, ecosystem, purl, version)
+
   else:
     logging.warning("Package query without ecosystem specified")
-    # Unspecified ecosystem. Try both.
+    # Unspecified ecosystem. Try semver first.
 
     # TODO: Remove after testing how many consumers are
     # querying the API this way.
@@ -840,9 +1079,12 @@ def query_by_version(context: QueryContext,
     new_bugs, _ = yield _query_by_semver(context, query, package_name,
                                          ecosystem, purl, version)
     bugs.extend(new_bugs)
+
     new_bugs, _ = yield _query_by_generic_version(context, query, package_name,
                                                   ecosystem, purl, version)
-    bugs.extend(new_bugs)
+    for bug in new_bugs:
+      if bug not in bugs:
+        bugs.append(bug)
 
     # Trying both is too difficult/ugly with paging
     # Our documentation states that this is an invalid query
@@ -908,7 +1150,7 @@ def query_by_package(context: QueryContext, package_name: str, ecosystem: str,
 
 def serve(port: int, local: bool):
   """Configures and runs the OSV API server."""
-  server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=10))
+  server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=5))
   servicer = OSVServicer()
   osv_service_v1_pb2_grpc.add_OSVServicer_to_server(servicer, server)
   health_pb2_grpc.add_HealthServicer_to_server(servicer, server)
@@ -941,6 +1183,7 @@ def main():
   """Entrypoint."""
   if is_cloud_run():
     setup_gcp_logging('api-backend')
+    logging.getLogger().addFilter(trace_filter)
 
   logging.getLogger().setLevel(logging.INFO)
 

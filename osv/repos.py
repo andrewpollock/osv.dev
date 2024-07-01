@@ -20,6 +20,7 @@ import subprocess
 import time
 
 import pygit2
+import pygit2.enums
 
 CLONE_TRIES = 3
 RETRY_SLEEP_SECONDS = 5
@@ -46,11 +47,10 @@ class GitRemoteCallback(pygit2.RemoteCallbacks):
     """Get credentials."""
     del url
     del username_from_url
-
-    if allowed_types & pygit2.credentials.GIT_CREDENTIAL_USERNAME:
+    if allowed_types & pygit2.enums.CredentialType.USERNAME:
       return pygit2.Username(self.username)
 
-    if allowed_types & pygit2.credentials.GIT_CREDENTIAL_SSH_KEY:
+    if allowed_types & pygit2.CredentialType.SSH_KEY:
       return pygit2.Keypair(self.username, self.ssh_key_public_path,
                             self.ssh_key_private_path, '')
 
@@ -70,15 +70,15 @@ def _git_mirror(git_url):
 def _checkout_branch(repo, branch):
   """Check out a branch."""
   remote_branch = repo.lookup_branch('origin/' + branch,
-                                     pygit2.GIT_BRANCH_REMOTE)
-  local_branch = repo.lookup_branch(branch, pygit2.GIT_BRANCH_LOCAL)
+                                     pygit2.enums.BranchType.REMOTE)
+  local_branch = repo.lookup_branch(branch, pygit2.enums.BranchType.LOCAL)
   if not local_branch:
     local_branch = repo.branches.create(branch, commit=remote_branch.peel())
 
   local_branch.upstream = remote_branch
   local_branch.set_target(remote_branch.target)
   repo.checkout(local_branch)
-  repo.reset(remote_branch.target, pygit2.GIT_RESET_HARD)
+  repo.reset(remote_branch.target, pygit2.enums.ResetMode.HARD)
 
 
 def _set_git_callback_env(git_callbacks):
@@ -95,17 +95,26 @@ def _set_git_callback_env(git_callbacks):
   return env
 
 
+class GitCloneError(Exception):
+  """Git repository clone exception."""
+
+
 def clone(git_url, checkout_dir, git_callbacks=None):
   """Perform a clone."""
-  # Use 'git' CLI here as it's much faster than libgit2's clone.
-  env = _set_git_callback_env(git_callbacks)
+  try:
+    # Use 'git' CLI here as it's much faster than libgit2's clone.
+    env = _set_git_callback_env(git_callbacks)
 
-  subprocess.run(
-      ['git', 'clone', _git_mirror(git_url), checkout_dir],
-      env=env,
-      capture_output=True,
-      check=True)
-  return pygit2.Repository(checkout_dir)
+    subprocess.run(
+        ['git', 'clone', _git_mirror(git_url), checkout_dir],
+        env=env,
+        capture_output=True,
+        check=True)
+    return pygit2.Repository(checkout_dir)
+  except subprocess.CalledProcessError as e:
+    raise GitCloneError(f'Failed to clone repo:\n{e.stderr.decode()}') from e
+  except pygit2.GitError as e:
+    raise GitCloneError('Failed to open cloned repo') from e
 
 
 def clone_with_retries(git_url, checkout_dir, git_callbacks=None, branch=None):
@@ -118,17 +127,12 @@ def clone_with_retries(git_url, checkout_dir, git_callbacks=None, branch=None):
       if branch:
         _checkout_branch(repo, branch)
       return repo
-    except (pygit2.GitError, subprocess.CalledProcessError) as e:
-      if attempt == CLONE_TRIES - 1:
-        err_str = str(e)
-        if isinstance(e, subprocess.CalledProcessError):
-          # add the git output to the log
-          err_str = f'{err_str}\n{e.stderr.decode()}'
-        logging.error('Clone failed after %d attempts: %s', CLONE_TRIES,
-                      err_str)
+    except GitCloneError:
       shutil.rmtree(checkout_dir, ignore_errors=True)
+      if attempt == CLONE_TRIES - 1:
+        logging.error('Clone failed after %d attempts', CLONE_TRIES)
+        raise
       time.sleep(RETRY_SLEEP_SECONDS)
-      continue
 
   return None
 
@@ -194,8 +198,8 @@ def reset_repo(repo, git_callbacks):
   # repo.remotes['origin'].fetch(callbacks=git_callbacks)
   remote_branch = repo.lookup_branch(
       repo.head.name.replace('refs/heads/', 'origin/'),
-      pygit2.GIT_BRANCH_REMOTE)
+      pygit2.enums.BranchType.REMOTE)
 
   # Reset to remote branch.
   repo.head.set_target(remote_branch.target)
-  repo.reset(remote_branch.target, pygit2.GIT_RESET_HARD)
+  repo.reset(remote_branch.target, pygit2.enums.ResetMode.HARD)

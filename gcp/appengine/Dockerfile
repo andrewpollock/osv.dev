@@ -1,5 +1,5 @@
 # Build the Javascript frontend
-FROM node:latest AS FRONTEND3_BUILD
+FROM node:20.9 AS FRONTEND3_BUILD
 WORKDIR /build/frontend3
 
 # Install dependencies first for better caching
@@ -33,7 +33,7 @@ WORKDIR /osv/gcp/appengine
 COPY setup.py Pipfile* README.md /osv/
 COPY osv /osv/osv
 COPY gcp/appengine/Pipfile* ./
-RUN pip3 install -U pipenv==2023.6.12 && python3 -m pipenv install --deploy --system
+RUN pip3 install -U pipenv==2023.12.1 && python3 -m pipenv install --deploy --system
 
 # Website Python code
 COPY gcp/appengine/*.py ./

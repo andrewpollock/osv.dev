@@ -19,6 +19,7 @@ import (
 	"context"
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -123,10 +124,7 @@ func RepoTags(repoURL string, repoTagsCache RepoTagsCache) (tags Tags, e error) 
 		return tags, err
 	}
 	tagsMap := make(map[string]Tag)
-	for _, ref := range refs {
-		if !ref.Name().IsTag() {
-			continue
-		}
+	for _, ref := range RefTags(refs) {
 		// This is used for caching and direct lookup by tag name.
 		tagsMap[ref.Name().Short()] = Tag{Tag: ref.Name().Short(), Commit: ref.Hash().String()}
 	}
@@ -154,6 +152,34 @@ func RepoTags(repoURL string, repoTagsCache RepoTagsCache) (tags Tags, e error) 
 	return tags, nil
 }
 
+// normalizeRepoTag returns a repo tag normalized.
+// It is:
+//   - lowercased,
+//   - the repo name, if present is removed
+//   - any Java package name prefix, if present is removed
+//
+// finally, it is run through the standard version normalizing treatment
+func normalizeRepoTag(tag string, reponame string) (normalizedTag string, err error) {
+	// Match the likes of "org.apache.sling.i18n-2.0.2" as seen in github.com/apache/sling-org-apache-sling-i18n
+	var javaPackageRegex = regexp.MustCompile(`(?i)^(?:[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+[0-9a-z_])(.*)$`)
+	// Opportunistically remove parts determined to match the repo name,
+	// to ease particularly difficult to normalize cases like 'openj9-0.38.0'.
+	prenormalizedTag := strings.TrimPrefix(strings.ToLower(tag), reponame)
+	// Deal with the reponame being in the *middle* of the tag like 'hudson-yui2-2800'
+	if strings.Contains(prenormalizedTag, reponame) {
+		_, after, found := strings.Cut(prenormalizedTag, reponame)
+		if found {
+			prenormalizedTag = after
+		}
+	}
+	if javaPackageRegex.MatchString(prenormalizedTag) {
+		prenormalizedTag = javaPackageRegex.FindStringSubmatch(prenormalizedTag)[1]
+	}
+	prenormalizedTag = strings.TrimPrefix(prenormalizedTag, "-")
+	normalizedTag, err = cves.NormalizeVersion(prenormalizedTag)
+	return normalizedTag, err
+}
+
 // NormalizeRepoTags returns a map of normalized tags mapping back to original tags and also commit hashes.
 // An optional repoTagsCache can be supplied to reduce repeated remote connections to the same repo.
 func NormalizeRepoTags(repoURL string, repoTagsCache RepoTagsCache) (NormalizedTags map[string]NormalizedTag, e error) {
@@ -174,11 +200,7 @@ func NormalizeRepoTags(repoURL string, repoTagsCache RepoTagsCache) (NormalizedT
 	}
 	NormalizedTags = make(map[string]NormalizedTag)
 	for _, t := range tags {
-		// Opportunistically remove parts determined to match the repo name,
-		// to ease particularly difficult to normalize cases like 'openj9-0.38.0'.
-		prenormalizedTag := strings.TrimPrefix(strings.ToLower(t.Tag), assumedReponame)
-		prenormalizedTag = strings.TrimPrefix(prenormalizedTag, "-")
-		normalizedTag, err := cves.NormalizeVersion(prenormalizedTag)
+		normalizedTag, err := normalizeRepoTag(strings.ToLower(t.Tag), assumedReponame)
 		if err != nil {
 			// It's conceivable that not all tags are normalizable or potentially versions.
 			continue
@@ -193,21 +215,54 @@ func NormalizeRepoTags(repoURL string, repoTagsCache RepoTagsCache) (NormalizedT
 	return NormalizedTags, nil
 }
 
+// Return a list of just the references that are tags.
+func RefTags(refs []*plumbing.Reference) (tags []*plumbing.Reference) {
+	for _, ref := range refs {
+		if ref.Name().IsTag() {
+			tags = append(tags, ref)
+		}
+	}
+	return tags
+}
+
+// Return a list of just the references that are branches.
+func RefBranches(refs []*plumbing.Reference) (branches []*plumbing.Reference) {
+	for _, ref := range refs {
+		if ref.Name().IsBranch() {
+			branches = append(branches, ref)
+		}
+	}
+	return branches
+}
+
 // Validate the repo by attempting to query it's references.
 func ValidRepo(repoURL string) (valid bool) {
-	remoteConfig := &config.RemoteConfig{
-		Name: "source",
-		URLs: []string{
-			repoURL,
-		},
-	}
-	r := git.NewRemote(memory.NewStorage(), remoteConfig)
-	_, err := r.List(&git.ListOptions{})
+	_, err := RemoteRepoRefsWithRetry(repoURL, 3)
 	if err != nil && err == transport.ErrAuthenticationRequired {
 		// somewhat strangely, we get an authentication prompt via Git on non-existent repos.
 		return false
 	}
 	if err != nil {
+		return false
+	}
+	return true
+}
+
+// Otherwise functional repos that don't have any tags are not valid.
+func ValidRepoAndHasUsableRefs(repoURL string) (valid bool) {
+	refs, err := RemoteRepoRefsWithRetry(repoURL, 3)
+	if err != nil && err == transport.ErrAuthenticationRequired {
+		// somewhat strangely, we get an authentication prompt via Git on non-existent repos.
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	if len(refs) == 0 {
+		return false
+	}
+	// Repos with no tags aren't useful.
+	if len(RefTags(refs)) == 0 {
 		return false
 	}
 	return true

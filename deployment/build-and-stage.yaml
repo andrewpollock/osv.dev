@@ -62,7 +62,7 @@ steps:
   args: ['push', '--all-tags', 'gcr.io/oss-vdb/worker-base']
   waitFor: ['build-worker-base', 'cloud-build-queue']
 
-# Build/push core worker/importer/exporter images.
+# Build/push core worker/importer/exporter/alias images.
 - name: gcr.io/cloud-builders/docker
   args: ['build', '-t', 'gcr.io/oss-vdb/worker:latest', '-t', 'gcr.io/oss-vdb/worker:$COMMIT_SHA', '-f', 'docker/worker/Dockerfile', '.']
   id: 'build-worker'
@@ -89,6 +89,25 @@ steps:
   args: ['push', '--all-tags', 'gcr.io/oss-vdb/exporter']
   waitFor: ['build-exporter', 'cloud-build-queue']
 
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t', 'gcr.io/oss-vdb/alias-computation:latest', '-t', 'gcr.io/oss-vdb/alias-computation:$COMMIT_SHA', '.']
+  dir: 'docker/alias'
+  id: 'build-alias-computation'
+  waitFor: ['build-worker']
+- name: gcr.io/cloud-builders/docker
+  args: ['push', '--all-tags', 'gcr.io/oss-vdb/alias-computation']
+  waitFor: ['build-alias-computation', 'cloud-build-queue']
+
+# Build/push cron job images.
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t', 'gcr.io/oss-vdb/cron:latest', '-t', 'gcr.io/oss-vdb/cron:$COMMIT_SHA', '.']
+  dir: 'docker/cron'
+  id: 'build-cron'
+  waitFor: ['build-worker']
+- name: gcr.io/cloud-builders/docker
+  args: ['push', '--all-tags', 'gcr.io/oss-vdb/cron']
+  waitFor: ['build-cron', 'cloud-build-queue']
+
 # Build/push vulnfeeds images
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
@@ -103,6 +122,20 @@ steps:
 - name: gcr.io/cloud-builders/docker
   args: ['push', '--all-tags', 'gcr.io/oss-vdb/alpine-cve-convert']
   waitFor: ['build-alpine-cve-convert', 'cloud-build-queue']
+
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: 'bash'
+  args: ['-c', 'docker pull gcr.io/oss-vdb/debian-cve-convert:latest || exit 0']
+  id: 'pull-debian-cve-convert'
+  waitFor: ['setup']
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t', 'gcr.io/oss-vdb/debian-cve-convert:latest', '-t', 'gcr.io/oss-vdb/debian-cve-convert:$COMMIT_SHA', '-f', 'cmd/debian/Dockerfile', '--cache-from', 'gcr.io/oss-vdb/debian-cve-convert:latest', '--pull', '.']
+  dir: 'vulnfeeds'
+  id: 'build-debian-cve-convert'
+  waitFor: ['pull-debian-cve-convert']
+- name: gcr.io/cloud-builders/docker
+  args: ['push', '--all-tags', 'gcr.io/oss-vdb/debian-cve-convert']
+  waitFor: ['build-debian-cve-convert', 'cloud-build-queue']
 
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
@@ -165,7 +198,7 @@ steps:
 
 # Build/push CPE repo map generating image
 - name: gcr.io/cloud-builders/docker
-  args: ['build', '-t', 'gcr.io/oss-vdb/cpe-repo-gen:latest', '-t', 'gcr.io/oss-vdb/cpe-repo-gen:$COMMIT_SHA', '-f', 'cmd/cperepos/Dockerfile','.']
+  args: ['build', '-t', 'gcr.io/oss-vdb/cpe-repo-gen:latest', '-t', 'gcr.io/oss-vdb/cpe-repo-gen:$COMMIT_SHA', '-f', 'cmd/cpe-repo-gen/Dockerfile','.']
   dir: 'vulnfeeds'
   id: 'build-cpe-repo-gen'
   waitFor: ['setup']
@@ -175,7 +208,7 @@ steps:
 
 # Build/push NVD CVE to OSV conversion image
 - name: gcr.io/cloud-builders/docker
-  args: ['build', '-t', 'gcr.io/oss-vdb/nvd-cve-osv:latest', '-t', 'gcr.io/oss-vdb/nvd-cve-osv:$COMMIT_SHA', '-f', 'cpp/Dockerfile','.']
+  args: ['build', '-t', 'gcr.io/oss-vdb/nvd-cve-osv:latest', '-t', 'gcr.io/oss-vdb/nvd-cve-osv:$COMMIT_SHA', '-f', 'cmd/nvd-cve-osv/Dockerfile','.']
   dir: 'vulnfeeds'
   id: 'build-nvd-cve-osv'
   waitFor: ['setup']
@@ -184,23 +217,32 @@ steps:
   waitFor: ['build-nvd-cve-osv', 'cloud-build-queue']
 
 # Build/push Website image
-# TODO(michaelkedar): The image gets saved on oss-vdb-test while we experiment with migration
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
-  args: ['-c', 'docker pull gcr.io/oss-vdb-test/osv-website:latest || exit 0']
+  args: ['-c', 'docker pull gcr.io/oss-vdb/osv-website:latest || exit 0']
   id: 'pull-website'
   waitFor: ['setup']
 - name: 'gcr.io/cloud-builders/docker'
   args: ['buildx', 'build', '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
-         '-t', 'gcr.io/oss-vdb-test/osv-website:latest', '-t', 'gcr.io/oss-vdb-test/osv-website:$COMMIT_SHA',
-         '-f', 'gcp/appengine/Dockerfile', '--cache-from', 'gcr.io/oss-vdb-test/osv-website:latest', '--pull', '.']
+         '-t', 'gcr.io/oss-vdb/osv-website:latest', '-t', 'gcr.io/oss-vdb/osv-website:$COMMIT_SHA',
+         '-f', 'gcp/appengine/Dockerfile', '--cache-from', 'gcr.io/oss-vdb/osv-website:latest', '--pull', '.']
   env:
   - BUILDKIT_PROGRESS=plain
   id: 'build-website'
   waitFor: ['pull-website']
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '--all-tags', 'gcr.io/oss-vdb-test/osv-website']
+  args: ['push', '--all-tags', 'gcr.io/oss-vdb/osv-website']
   waitFor: ['build-website', 'cloud-build-queue']
+
+# Build/push NVD mirror image
+- name: gcr.io/cloud-builders/docker
+  args: ['build', '-t', 'gcr.io/oss-vdb/nvd-mirror:latest', '-t', 'gcr.io/oss-vdb/nvd-mirror:$COMMIT_SHA', '-f', 'cmd/download-cves/Dockerfile','.']
+  dir: 'vulnfeeds'
+  id: 'build-nvd-mirror'
+  waitFor: ['setup']
+- name: gcr.io/cloud-builders/docker
+  args: ['push', '--all-tags', 'gcr.io/oss-vdb/nvd-mirror']
+  waitFor: ['build-nvd-mirror', 'cloud-build-queue']
 
 # Apply Terraform config to staging environment
 # TODO(michaelkedar): regenerate the api protobufs?
@@ -212,15 +254,6 @@ steps:
   args: ['apply', '-no-color', '-auto-approve']
   dir:  deployment/terraform/environments/oss-vdb-test
 
-# Deploy App Engine for staging environment
-- name: 'gcr.io/oss-vdb/deployment'
-  args: ['bash', '-ex', 'gcp/appengine/deploy.sh', 'oss-vdb-test', 'deployment/gae/oss-vdb-test', 'app.yaml']
-
-# Clean up older, non-serving App Engine versions to avoid hitting the ceiling on versions
-- name: 'gcr.io/cloud-builders/gcloud'
-  entrypoint: bash
-  args: ['-ex', 'gcp/appengine/cleanup_versions.sh', 'oss-vdb-test']
-
 # Cloud Deploy
 # GKE Workers
 - name: 'gcr.io/cloud-builders/gcloud'
@@ -229,12 +262,16 @@ steps:
     "worker=gcr.io/oss-vdb/worker:$COMMIT_SHA,\
      importer=gcr.io/oss-vdb/importer:$COMMIT_SHA,\
      exporter=gcr.io/oss-vdb/exporter:$COMMIT_SHA,\
+     alias-computation=gcr.io/oss-vdb/alias-computation:$COMMIT_SHA,\
+     cron=gcr.io/oss-vdb/cron:$COMMIT_SHA,\
      debian-convert=gcr.io/oss-vdb/debian-convert:$COMMIT_SHA,\
      combine-to-osv=gcr.io/oss-vdb/combine-to-osv:$COMMIT_SHA,\
      alpine-cve-convert=gcr.io/oss-vdb/alpine-cve-convert:$COMMIT_SHA,\
+     debian-cve-convert=gcr.io/oss-vdb/debian-cve-convert:$COMMIT_SHA,\
      debian-copyright-mirror=gcr.io/oss-vdb/debian-copyright-mirror:$COMMIT_SHA,\
      cpe-repo-gen=gcr.io/oss-vdb/cpe-repo-gen:$COMMIT_SHA,\
-     nvd-cve-osv=gcr.io/oss-vdb/nvd-cve-osv:$COMMIT_SHA"
+     nvd-cve-osv=gcr.io/oss-vdb/nvd-cve-osv:$COMMIT_SHA,\
+     nvd-mirror=gcr.io/oss-vdb/nvd-mirror:$COMMIT_SHA"
   ]
   dir: deployment/clouddeploy/gke-workers
 
@@ -255,11 +292,10 @@ steps:
   dir: deployment/clouddeploy/gke-indexer
 
 # Website
-# TODO(michaelkedar): Move off of oss-vdb-test for prod
 - name: 'gcr.io/cloud-builders/gcloud'
-  args: ['deploy', 'releases', 'create', 'osv-$SHORT_SHA', '--project=oss-vdb-test', '--region=us-central1',
+  args: ['deploy', 'releases', 'create', 'osv-$SHORT_SHA', '--project=oss-vdb', '--region=us-central1',
     '--delivery-pipeline=osv-website', '--images',
-    "osv-website=gcr.io/oss-vdb-test/osv-website:$COMMIT_SHA"
+    "osv-website=gcr.io/oss-vdb/osv-website:$COMMIT_SHA"
   ]
   dir: deployment/clouddeploy/osv-website
 
@@ -277,7 +313,10 @@ images:
 - 'gcr.io/oss-vdb/worker:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/importer:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/exporter:$COMMIT_SHA'
+- 'gcr.io/oss-vdb/alias-computation:$COMMIT_SHA'
+- 'gcr.io/oss-vdb/cron:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/alpine-cve-convert:$COMMIT_SHA'
+- 'gcr.io/oss-vdb/debian-cve-convert:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/combine-to-osv:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/indexer:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/debian-convert:$COMMIT_SHA'
@@ -285,3 +324,4 @@ images:
 - 'gcr.io/oss-vdb/debian-copyright-mirror:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/cpe-repo-gen:$COMMIT_SHA'
 - 'gcr.io/oss-vdb/nvd-cve-osv:$COMMIT_SHA'
+- 'gcr.io/oss-vdb/nvd-mirror:$COMMIT_SHA'

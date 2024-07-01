@@ -13,6 +13,7 @@
 # limitations under the License.
 """Test helpers."""
 import datetime
+import difflib
 import os
 import pprint
 from proto import datetime_helpers
@@ -23,9 +24,10 @@ import threading
 from unittest import mock
 
 import pygit2
+import pygit2.enums
 
 _EMULATOR_TIMEOUT = 30
-_DATASTORE_EMULATOR_PORT = 8002
+_DATASTORE_EMULATOR_PORT = '8002'
 _DATASTORE_READY_INDICATOR = b'is now running'
 TEST_PROJECT_ID = 'test-osv'
 
@@ -55,6 +57,16 @@ def ExpectationTest(test_data_dir):  # pylint: disable=invalid-name
       """Check if the output dict is equal to the expected value."""
       self.assertDictEqual(self._load_expected(expected_name, actual), actual)
 
+    def expect_lines_equal(self, expected_name, actual_lines):
+      """Check if the output lines is equal to the expected value,
+      printing a diff when it is different."""
+      expected_lines = self._load_expected(expected_name, actual_lines)
+      if expected_lines != actual_lines:
+        diff = difflib.unified_diff(expected_lines, actual_lines, 'expected',
+                                    'actual')
+        print(''.join(diff))
+        self.fail()
+
     def expect_equal(self, expected_name, actual):
       """Check if the output is equal to the expected value."""
       self.assertEqual(self._load_expected(expected_name, actual), actual)
@@ -74,8 +86,9 @@ class MockRepo:
 
   def add_file(self, path, contents):
     """Adds a file."""
-    oid = self._repo.write(pygit2.GIT_OBJ_BLOB, contents)
-    self._repo.index.add(pygit2.IndexEntry(path, oid, pygit2.GIT_FILEMODE_BLOB))
+    oid = self._repo.write(pygit2.enums.ObjectType.BLOB, contents)
+    self._repo.index.add(
+        pygit2.IndexEntry(path, oid, pygit2.enums.FileMode.BLOB))
     self._repo.index.write()
 
   def delete_file(self, path):
@@ -88,13 +101,13 @@ class MockRepo:
     tree = self._repo.index.write_tree()
     author = pygit2.Signature(author_name, author_email)
     self._repo.create_commit('HEAD', author, author, message, tree,
-                             [self._repo.head.peel().oid])
+                             [self._repo.head.peel().id])
 
 
 def start_datastore_emulator():
   """Starts Datastore emulator."""
-  os.environ['DATASTORE_EMULATOR_HOST'] = 'localhost:' + str(
-      _DATASTORE_EMULATOR_PORT)
+  port = os.environ.get('DATASTORE_EMULATOR_PORT', _DATASTORE_EMULATOR_PORT)
+  os.environ['DATASTORE_EMULATOR_HOST'] = 'localhost:' + port
   os.environ['DATASTORE_PROJECT_ID'] = TEST_PROJECT_ID
   os.environ['GOOGLE_CLOUD_PROJECT'] = TEST_PROJECT_ID
   proc = subprocess.Popen([
@@ -104,7 +117,7 @@ def start_datastore_emulator():
       'datastore',
       'start',
       '--consistency=1.0',
-      '--host-port=localhost:' + str(_DATASTORE_EMULATOR_PORT),
+      '--host-port=localhost:' + port,
       '--project=' + TEST_PROJECT_ID,
       '--no-store-on-disk',
   ],
@@ -148,10 +161,23 @@ def _wait_for_emulator_ready(proc,
 
 def reset_emulator():
   """Resets emulator."""
+  port = os.environ.get('DATASTORE_EMULATOR_PORT', _DATASTORE_EMULATOR_PORT)
   resp = requests.post(
-      'http://localhost:{}/reset'.format(_DATASTORE_EMULATOR_PORT),
-      timeout=_EMULATOR_TIMEOUT)
+      'http://localhost:{}/reset'.format(port), timeout=_EMULATOR_TIMEOUT)
   resp.raise_for_status()
+
+
+def stop_emulator():
+  """Stops emulator."""
+  try:
+    port = os.environ.get('DATASTORE_EMULATOR_PORT', _DATASTORE_EMULATOR_PORT)
+    resp = requests.post(
+        'http://localhost:{}/shutdown'.format(port), timeout=_EMULATOR_TIMEOUT)
+    resp.raise_for_status()
+  except Exception as e:
+    # Something went wrong, manually kill all datastore processes instead.
+    os.system('pkill -f datastore')
+    raise e
 
 
 def mock_datetime(test):

@@ -15,17 +15,19 @@
 package vulns
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
 	"golang.org/x/exp/slices"
+
 	"gopkg.in/yaml.v2"
 
 	"github.com/google/osv/vulnfeeds/cves"
@@ -57,9 +59,10 @@ type Severity struct {
 }
 
 type Affected struct {
-	Package  *AffectedPackage `json:"package,omitempty"`
-	Ranges   []AffectedRange  `json:"ranges" yaml:"ranges"`
-	Versions []string         `json:"versions,omitempty" yaml:"versions,omitempty"`
+	Package           *AffectedPackage  `json:"package,omitempty"`
+	Ranges            []AffectedRange   `json:"ranges" yaml:"ranges"`
+	Versions          []string          `json:"versions,omitempty" yaml:"versions,omitempty"`
+	EcosystemSpecific map[string]string `json:"ecosystem_specific,omitempty" yaml:"ecosystem_specific,omitempty"`
 }
 
 // AttachExtractedVersionInfo converts the cves.VersionInfo struct to OSV GIT and ECOSYSTEM AffectedRanges and AffectedPackage.
@@ -160,10 +163,11 @@ func (affected *Affected) AttachExtractedVersionInfo(version cves.VersionInfo) {
 
 // PackageInfo is an intermediate struct to ease generating Vulnerability structs.
 type PackageInfo struct {
-	PkgName     string           `json:"pkg_name,omitempty" yaml:"pkg_name,omitempty"`
-	Ecosystem   string           `json:"ecosystem,omitempty" yaml:"ecosystem,omitempty"`
-	PURL        string           `json:"purl,omitempty" yaml:"purl,omitempty"`
-	VersionInfo cves.VersionInfo `json:"fixed_version,omitempty" yaml:"fixed_version,omitempty"`
+	PkgName           string            `json:"pkg_name,omitempty" yaml:"pkg_name,omitempty"`
+	Ecosystem         string            `json:"ecosystem,omitempty" yaml:"ecosystem,omitempty"`
+	PURL              string            `json:"purl,omitempty" yaml:"purl,omitempty"`
+	VersionInfo       cves.VersionInfo  `json:"fixed_version,omitempty" yaml:"fixed_version,omitempty"`
+	EcosystemSpecific map[string]string `json:"ecosystem_specific,omitempty" yaml:"ecosystem_specific,omitempty"`
 }
 
 func (pi *PackageInfo) ToJSON(w io.Writer) error {
@@ -187,6 +191,12 @@ type Reference struct {
 	Type string `json:"type" yaml:"type"`
 	URL  string `json:"url" yaml:"url"`
 }
+
+type References []Reference
+
+func (r References) Len() int           { return len(r) }
+func (r References) Less(i, j int) bool { return r[i].Type < r[j].Type }
+func (r References) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 
 type Vulnerability struct {
 	ID         string      `json:"id" yaml:"id"`
@@ -213,44 +223,50 @@ func (v *Vulnerability) AddPkgInfo(pkgInfo PackageInfo) {
 		}
 	}
 
+	// Aggregate commits by their repo, and synthesize a zero introduced commit if necessary.
 	if len(pkgInfo.VersionInfo.AffectedCommits) > 0 {
-		gitVersionRangesByRepo := map[string]AffectedRange{}
+		gitCommitRangesByRepo := map[string]AffectedRange{}
 
 		hasAddedZeroIntroduced := make(map[string]bool)
 
 		for _, ac := range pkgInfo.VersionInfo.AffectedCommits {
-			entry, ok := gitVersionRangesByRepo[ac.Repo]
+			entry, ok := gitCommitRangesByRepo[ac.Repo]
+			// Create the stub for the repo if necessary.
 			if !ok {
 				entry = AffectedRange{
 					Type:   "GIT",
 					Events: []Event{},
 					Repo:   ac.Repo,
 				}
+
+				if !pkgInfo.VersionInfo.HasIntroducedCommits(ac.Repo) && !hasAddedZeroIntroduced[ac.Repo] {
+					// There was no explicitly defined introduced commit, so create one at 0.
+					entry.Events = append(entry.Events,
+						Event{
+							Introduced: "0",
+						},
+					)
+					hasAddedZeroIntroduced[ac.Repo] = true
+				}
 			}
 
-			if !pkgInfo.VersionInfo.HasIntroducedCommits(ac.Repo) && !hasAddedZeroIntroduced[ac.Repo] {
-				// There was no explicitly defined introduced commit, so create one at 0
-				entry.Events = append(entry.Events,
-					Event{
-						Introduced: "0",
-					},
-				)
-				hasAddedZeroIntroduced[ac.Repo] = true
+			if ac.Introduced != "" {
+				entry.Events = append(entry.Events, Event{Introduced: ac.Introduced})
 			}
-
-			entry.Events = append(entry.Events,
-				Event{
-					Introduced:   ac.Introduced,
-					Fixed:        ac.Fixed,
-					LastAffected: ac.LastAffected,
-					Limit:        ac.Limit,
-				},
-			)
-			gitVersionRangesByRepo[ac.Repo] = entry
+			if ac.Fixed != "" {
+				entry.Events = append(entry.Events, Event{Fixed: ac.Fixed})
+			}
+			if ac.LastAffected != "" {
+				entry.Events = append(entry.Events, Event{LastAffected: ac.LastAffected})
+			}
+			if ac.Limit != "" {
+				entry.Events = append(entry.Events, Event{Limit: ac.Limit})
+			}
+			gitCommitRangesByRepo[ac.Repo] = entry
 		}
 
-		for repo := range gitVersionRangesByRepo {
-			affected.Ranges = append(affected.Ranges, gitVersionRangesByRepo[repo])
+		for repo := range gitCommitRangesByRepo {
+			affected.Ranges = append(affected.Ranges, gitCommitRangesByRepo[repo])
 		}
 	}
 
@@ -263,12 +279,20 @@ func (v *Vulnerability) AddPkgInfo(pkgInfo PackageInfo) {
 		for _, av := range pkgInfo.VersionInfo.AffectedVersions {
 			if av.Introduced != "" {
 				hasIntroduced = true
+				versionRange.Events = append(versionRange.Events, Event{
+					Introduced: av.Introduced,
+				})
 			}
-			versionRange.Events = append(versionRange.Events, Event{
-				Introduced:   av.Introduced,
-				Fixed:        av.Fixed,
-				LastAffected: av.LastAffected,
-			})
+			if av.Fixed != "" {
+				versionRange.Events = append(versionRange.Events, Event{
+					Fixed: av.Fixed,
+				})
+			}
+			if av.LastAffected != "" {
+				versionRange.Events = append(versionRange.Events, Event{
+					LastAffected: av.LastAffected,
+				})
+			}
 		}
 
 		if !hasIntroduced {
@@ -279,21 +303,64 @@ func (v *Vulnerability) AddPkgInfo(pkgInfo PackageInfo) {
 			}}, versionRange.Events...)
 		}
 		affected.Ranges = append(affected.Ranges, versionRange)
-
 	}
 
+	// Sort affected[].ranges (by type) for stability.
+	// https://ossf.github.io/osv-schema/#requirements
+	slices.SortFunc(affected.Ranges, func(a, b AffectedRange) int {
+		if n := cmp.Compare(a.Type, b.Type); n != 0 {
+			return n
+		}
+		// Sort by repo within the same (GIT) typed range.
+		return cmp.Compare(a.Repo, b.Repo)
+	})
+
+	affected.EcosystemSpecific = pkgInfo.EcosystemSpecific
 	v.Affected = append(v.Affected, affected)
 }
 
 // AddSeverity adds CVSS3 severity information to the OSV vulnerability object.
-func (v *Vulnerability) AddSeverity(CVEImpact cves.CVEImpact) {
-	if CVEImpact == (cves.CVEImpact{}) {
+// It uses the highest available CVSS 3.x Primary score from the underlying CVE record.
+func (v *Vulnerability) AddSeverity(CVEImpact *cves.CVEItemMetrics) {
+	if CVEImpact == nil {
+		return
+	}
+
+	// Use the highest available of CvssMetric31, CvssMetric30
+	// from the Primary scorer.
+	var bestVectorString string
+
+	for _, metric := range CVEImpact.CVSSMetricV31 {
+		if bestVectorString != "" {
+			break
+		}
+		if metric.Type != "Primary" {
+			continue
+		}
+		bestVectorString = metric.CVSSData.VectorString
+	}
+
+	// No CVSS 3.1, try falling back to CVSS 3.0 if available.
+	if bestVectorString == "" {
+		for _, metric := range CVEImpact.CVSSMetricV30 {
+			if bestVectorString != "" {
+				break
+			}
+			if metric.Type != "Primary" {
+				continue
+			}
+			bestVectorString = metric.CVSSData.VectorString
+		}
+	}
+
+	// No luck, nothing to add.
+	if bestVectorString == "" {
 		return
 	}
 
 	severity := Severity{
 		Type:  "CVSS_V3",
-		Score: CVEImpact.BaseMetricV3.CVSSV3.VectorString,
+		Score: bestVectorString,
 	}
 
 	v.Severity = append(v.Severity, severity)
@@ -307,15 +374,6 @@ func (v *Vulnerability) ToJSON(w io.Writer) error {
 func (v *Vulnerability) ToYAML(w io.Writer) error {
 	encoder := yaml.NewEncoder(w)
 	return encoder.Encode(v)
-}
-
-func timestampToRFC3339(timestamp string) (string, error) {
-	t, err := cves.ParseTimestamp(timestamp)
-	if err != nil {
-		return "", err
-	}
-
-	return t.Format(time.RFC3339), nil
 }
 
 func CVE5timestampToRFC3339(timestamp string) (string, error) {
@@ -458,14 +516,14 @@ func ClassifyReferenceLink(link string, tag string) string {
 	return "WEB"
 }
 
-func extractAliases(id string, cve cves.CVE) []string {
+func extractAliases(id cves.CVEID, cve cves.CVE) []string {
 	var aliases []string
-	if id != cve.CVEDataMeta.ID {
-		aliases = append(aliases, cve.CVEDataMeta.ID)
+	if id != cve.ID {
+		aliases = append(aliases, string(cve.ID))
 	}
 
-	for _, reference := range cve.References.ReferenceData {
-		u, err := url.Parse(reference.URL)
+	for _, reference := range cve.References {
+		u, err := url.Parse(reference.Url)
 		if err == nil {
 			pathParts := strings.Split(u.Path, "/")
 
@@ -477,7 +535,7 @@ func extractAliases(id string, cve cves.CVE) []string {
 					if pathParts[len(pathParts)-2] == "advisories" {
 						a := pathParts[len(pathParts)-1]
 
-						if id != a && strings.HasPrefix(a, "GHSA-") {
+						if string(id) != a && strings.HasPrefix(a, "GHSA-") {
 							aliases = append(aliases, a)
 						}
 					}
@@ -488,7 +546,7 @@ func extractAliases(id string, cve cves.CVE) []string {
 					if pathParts[1] == "vuln" {
 						a := pathParts[len(pathParts)-1]
 
-						if id != a && strings.HasPrefix(a, "SNYK-") {
+						if string(id) != a && strings.HasPrefix(a, "SNYK-") {
 							aliases = append(aliases, a)
 						}
 					}
@@ -513,48 +571,40 @@ func unique[T comparable](s []T) []T {
 }
 
 // Annotates reference links based on their tags or the shape of them.
-func ClassifyReferences(refs cves.CVEReferences) []Reference {
-	references := []Reference{}
-	for _, reference := range refs.ReferenceData {
+func ClassifyReferences(refs []cves.Reference) (references References) {
+	for _, reference := range refs {
 		if len(reference.Tags) > 0 {
 			for _, tag := range reference.Tags {
 				references = append(references, Reference{
-					Type: ClassifyReferenceLink(reference.URL, tag),
-					URL:  reference.URL,
+					Type: ClassifyReferenceLink(reference.Url, tag),
+					URL:  reference.Url,
 				})
 			}
 		} else {
 			references = append(references, Reference{
-				Type: ClassifyReferenceLink(reference.URL, ""),
-				URL:  reference.URL,
+				Type: ClassifyReferenceLink(reference.Url, ""),
+				URL:  reference.Url,
 			})
 		}
 	}
-	return unique(references)
+	references = unique(references)
+	sort.Stable(references)
+	return references
 }
 
 // FromCVE creates a minimal OSV object from a given CVEItem and id.
 // Leaves affected and version fields empty to be filled in later with AddPkgInfo
-func FromCVE(id string, cve cves.CVEItem) (*Vulnerability, []string) {
+func FromCVE(id cves.CVEID, cve cves.CVE) (*Vulnerability, []string) {
 	v := Vulnerability{
-		ID:      id,
-		Details: cves.EnglishDescription(cve.CVE),
-		Aliases: extractAliases(id, cve.CVE),
+		ID:      string(id),
+		Details: cves.EnglishDescription(cve),
+		Aliases: extractAliases(id, cve),
 	}
-	var err error
 	var notes []string
-	v.Published, err = timestampToRFC3339(cve.PublishedDate)
-	if err != nil {
-		notes = append(notes, fmt.Sprintf("Failed to parse published date: %v\n", err))
-	}
-
-	v.Modified, err = timestampToRFC3339(cve.LastModifiedDate)
-	if err != nil {
-		notes = append(notes, fmt.Sprintf("Failed to parse modified date: %v\n", err))
-	}
-
-	v.References = ClassifyReferences(cve.CVE.References)
-	v.AddSeverity(cve.Impact)
+	v.Published = cve.Published.Format(time.RFC3339)
+	v.Modified = cve.LastModified.Format(time.RFC3339)
+	v.References = ClassifyReferences(cve.References)
+	v.AddSeverity(cve.Metrics)
 	return &v, notes
 }
 

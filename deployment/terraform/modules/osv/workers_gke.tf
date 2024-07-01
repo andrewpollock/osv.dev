@@ -15,7 +15,6 @@ resource "google_container_cluster" "workers" {
   # We need to define this for private clusters, but all fields are optional.
   ip_allocation_policy {}
 
-  provider = google-beta
   addons_config {
     gce_persistent_disk_csi_driver_config {
       enabled = true
@@ -107,11 +106,11 @@ resource "google_container_node_pool" "highend" {
       workloadType = "highend"
     }
 
-    taint = [{
+    taint {
       effect = "NO_EXECUTE"
       key    = "workloadType"
       value  = "highend"
-    }]
+    }
 
   }
 }
@@ -143,11 +142,11 @@ resource "google_container_node_pool" "importer_pool" {
       workloadType = "importer-pool"
     }
 
-    taint = [{
+    taint {
       effect = "NO_EXECUTE"
       key    = "workloadType"
       value  = "importer-pool"
-    }]
+    }
   }
 }
 
@@ -159,5 +158,11 @@ data "google_compute_default_service_account" "default" {
 resource "google_project_iam_member" "compute_service" {
   project = var.project_id
   role    = "roles/editor"
+  member  = "serviceAccount:${data.google_compute_default_service_account.default.email}"
+}
+
+resource "google_project_iam_member" "compute_service_datastore" {
+  project = var.project_id
+  role    = "roles/datastore.importExportAdmin"
   member  = "serviceAccount:${data.google_compute_default_service_account.default.email}"
 }

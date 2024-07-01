@@ -55,12 +55,15 @@ _ecosystems = {
     # handled separately in get().
     'AlmaLinux': OrderingUnsupportedEcosystem(),
     'Alpine': OrderingUnsupportedEcosystem(),
+    'Chainguard': OrderingUnsupportedEcosystem(),
     'Debian': OrderingUnsupportedEcosystem(),
     'Photon OS': OrderingUnsupportedEcosystem(),
     'Rocky Linux': OrderingUnsupportedEcosystem(),
+    'Ubuntu': OrderingUnsupportedEcosystem(),
+    'Wolfi': OrderingUnsupportedEcosystem(),
 }
 
-# Semver-based ecosystems, should correspond to _ecoystems above.
+# Semver-based ecosystems, should correspond to _ecosystems above.
 # TODO(michaelkedar): Avoid need to keep in sync with above.
 SEMVER_ECOSYSTEMS = {
     'Bitnami',
@@ -83,10 +86,19 @@ package_urls = {
     'npm': 'https://www.npmjs.com/package/',
     'NuGet': 'https://www.nuget.org/packages/',
     'Packagist': 'https://packagist.org/packages/',
-    'Pub': 'https://pub-web.flutter-io.cn/packages/',
+    'Pub': 'https://pub.dev/packages/',
     'PyPI': 'https://pypi.org/project/',
     'Rocky Linux': 'https://pkgs.org/download/',
     'RubyGems': 'https://rubygems.org/gems/',
+}
+
+_OSV_TO_DEPS_ECOSYSTEMS_MAP = {
+    'npm': 'npm',
+    'Go': 'go',
+    'Maven': 'maven',
+    'PyPI': 'pypi',
+    'NuGet': 'nuget',
+    'crates.io': 'cargo'
 }
 
 
@@ -100,15 +112,19 @@ def get(name: str) -> Ecosystem:
     return Alpine(name.split(':')[1])
 
   if name.startswith('AlmaLinux:'):
-    # TODO(michaelkedar)
+    # TODO(unassigned)
     return OrderingUnsupportedEcosystem()
 
   if name.startswith('Rocky Linux:'):
-    # TODO(michaelkedar)
+    # TODO(unassigned)
     return OrderingUnsupportedEcosystem()
 
   if name.startswith('Photon OS:'):
-    # TODO(michaelkedar)
+    # TODO(unassigned)
+    return OrderingUnsupportedEcosystem()
+
+  if name.startswith('Ubuntu:'):
+    # TODO(unassigned)
     return OrderingUnsupportedEcosystem()
 
   return _ecosystems.get(name)
@@ -116,3 +132,11 @@ def get(name: str) -> Ecosystem:
 
 def normalize(ecosystem_name: str):
   return ecosystem_name.split(':')[0]
+
+
+def is_supported_in_deps_dev(ecosystem_name: str) -> bool:
+  return ecosystem_name in _OSV_TO_DEPS_ECOSYSTEMS_MAP
+
+
+def map_ecosystem_to_deps_dev(ecosystem_name: str) -> str:
+  return _OSV_TO_DEPS_ECOSYSTEMS_MAP.get(ecosystem_name)

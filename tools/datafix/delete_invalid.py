@@ -5,6 +5,7 @@ See https://github.com/google/osv.dev/issues/1098 for additional context.
 """
 
 from google.cloud import datastore
+from google.cloud.datastore.query import And, PropertyFilter
 
 import argparse
 import sys
@@ -49,8 +50,12 @@ def main() -> None:
     print(f"Unable to determine source from {args.source_id_prefix}")
     sys.exit(1)
 
-  query = client.query(
-      kind="Bug", filters=(("status", "=", 2), ("source", "=", source)))
+  query = client.query(kind="Bug")
+  query.add_filter(
+      filter=And([
+          PropertyFilter("status", "=", 2),
+          PropertyFilter("source", "=", source)
+      ]))
 
   print(f"Running query {query.filters} "
         f"on {query.kind} (in {query.project})...")
@@ -82,6 +87,8 @@ def main() -> None:
       # subsequent batches from being attempted.
       if args.dryrun and e.args[0].startswith("Dry run mode"):
         pass
+      else:
+        raise
   if len(result_to_delete) > 0 and not args.dryrun:
     print("Deleted!")
 

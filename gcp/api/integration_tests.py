@@ -13,7 +13,10 @@
 # limitations under the License.
 """API server integration tests."""
 
+import copy
+import functools
 import json
+import itertools
 import os
 import sys
 import subprocess
@@ -23,9 +26,13 @@ import unittest
 import requests
 
 import test_server
+from osv import tests
 
 _PORT = 8080
 _TIMEOUT = 10  # Timeout for HTTP(S) requests
+_LONG_TESTS = os.getenv('LONG_TESTS')
+_TEST_DATA_DIR = 'fixtures'
+_BASE_QUERY = '/v1/query'
 
 
 def _api():
@@ -37,8 +44,56 @@ def _api():
   return f'http://{host}:{_PORT}'
 
 
-class IntegrationTests(unittest.TestCase):
+class IntegrationTests(unittest.TestCase,
+                       tests.ExpectationTest(_TEST_DATA_DIR)):
   """Server integration tests."""
+
+  _VULN_890 = {
+      'published': '2023-09-21T14:01:03.576514Z',
+      'schema_version': '1.6.0',
+      'affected': [{
+          'database_specific': {
+              'source': 'https://github.com/google/oss-fuzz-vulns/'
+                        'blob/main/vulns/libdwarf/OSV-2023-890.yaml'
+          },
+          'ecosystem_specific': {
+              'severity': 'HIGH'
+          },
+          'package': {
+              'ecosystem': 'OSS-Fuzz',
+              'name': 'libdwarf',
+              'purl': 'pkg:generic/libdwarf'
+          },
+          'ranges': [{
+              'events': [{
+                  'introduced': 'b55ce0185528bf0a99e375cf8f3c84b76b6881a3'
+              }, {
+                  'fixed': 'cd741379bd0203a0875b413542d5f982606ae637'
+              }],
+              'repo': 'https://github.com/davea42/libdwarf-code',
+              'type': 'GIT'
+          }],
+          'versions': [
+              'libdwarf-0.7.0', 'libdwarf-0.8.0-fixedtag', 'v0.7.0',
+              'v0.8.0-fixedtag'
+          ]
+      }],
+      'details': 'OSS-Fuzz report: '
+                 'https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=62547\n'
+                 '\n'
+                 '```\n'
+                 'Crash type: Heap-use-after-free READ 2\n'
+                 'Crash state:\n'
+                 'dwarf_dealloc\n'
+                 '_dwarf_fde_destructor\n'
+                 'tdestroy_free_node\n```\n',
+      'id': 'OSV-2023-890',
+      'references': [{
+          'type': 'REPORT',
+          'url': 'https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=62547',
+      }],
+      'summary': 'Heap-use-after-free in dwarf_dealloc',
+  }
 
   _VULN_744 = {
       'published': '2020-07-04T00:00:01.948828Z',
@@ -141,19 +196,19 @@ class IntegrationTests(unittest.TestCase):
   def test_query_commit(self):
     """Test querying by commit."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
-            'commit': '233cb49903fa17637bd51f4a16b4ca61e0750f24',
+            'commit': '60e572dbf7b4ded66b488f54773f66aaf6184321',
         }),
         timeout=_TIMEOUT)
-    self.assert_results_equal({'vulns': [self._VULN_744]}, response.json())
+    self.assert_results_equal({'vulns': [self._VULN_890]}, response.json())
 
   def test_query_version(self):
     """Test querying by version."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
-            'version': '2.1.2rc',
+            'version': '2.1.2-rc',
             'package': {
                 'name': 'mruby',
                 'ecosystem': 'OSS-Fuzz',
@@ -163,7 +218,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({'vulns': [self._VULN_744]}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '2.1.2-rc',
             'package': {
@@ -182,7 +237,7 @@ class IntegrationTests(unittest.TestCase):
     dsa_2665_1 = self._get('DSA-710-1')
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.0.2-1',
             'package': {
@@ -194,7 +249,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({'vulns': [dsa_2665_1]}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.0.2-1',
             'package': {
@@ -208,7 +263,7 @@ class IntegrationTests(unittest.TestCase):
     # The vulnerbility does not exist in 4.0 release, so this should return
     # with nothing
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.0.2-1',
             'package': {
@@ -220,7 +275,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.0.2-1',
             'package': {
@@ -253,7 +308,7 @@ class IntegrationTests(unittest.TestCase):
     # Test that a SemVer (believed to be vulnerable) version and an ecosystem
     # returns expected vulnerabilities.
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.1.4',
             'package': {
@@ -268,7 +323,7 @@ class IntegrationTests(unittest.TestCase):
     # ecosystem returns expected vulnerabilities to test the fallback logic to
     # try semver matching in the case that an ecosystem isn't specified.
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.1.4',
             'package': {
@@ -282,7 +337,7 @@ class IntegrationTests(unittest.TestCase):
   def test_query_invalid_ecosystem(self):
     """Test a query with an invalid ecosystem fails validation."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.0.0',
             'package': {
@@ -300,7 +355,7 @@ class IntegrationTests(unittest.TestCase):
   def test_query_unknown_purl_invalid_semver(self):
     """Test an unknown purl query with an invalid semver"""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl':
@@ -313,7 +368,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl':
@@ -334,7 +389,7 @@ class IntegrationTests(unittest.TestCase):
     # ecosystem returns no vulnerabilities.
     # (This version does not exist)
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '1.1.1',
             'package': {
@@ -348,7 +403,7 @@ class IntegrationTests(unittest.TestCase):
   def test_query_semver_multiple_package(self):
     """Test query by SemVer (with multiple packages)."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '2.4.0',
             'package': {
@@ -361,7 +416,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '2.4.0',
             'package': {
@@ -376,7 +431,7 @@ class IntegrationTests(unittest.TestCase):
                           [vuln['id'] for vuln in response_json['vulns']])
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '7.1.1',
             'package': {
@@ -387,8 +442,8 @@ class IntegrationTests(unittest.TestCase):
         timeout=_TIMEOUT)
 
     response_json = response.json()
-    self.assertEqual(1, len(response_json['vulns']))
-    self.assertCountEqual(['GHSA-6fc8-4gx4-v693'],
+    self.assertEqual(2, len(response_json['vulns']))
+    self.assertCountEqual(['GHSA-6fc8-4gx4-v693', 'GHSA-3h5v-q93c-6h6q'],
                           [vuln['id'] for vuln in response_json['vulns']])
 
   def test_query_purl(self):
@@ -399,7 +454,7 @@ class IntegrationTests(unittest.TestCase):
     ]
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'version': '0.8.6',
             'package': {
@@ -411,7 +466,7 @@ class IntegrationTests(unittest.TestCase):
     self.assert_results_equal({'vulns': expected}, response.json())
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps(
             {'package': {
                 'purl': 'pkg:cargo/crossbeam-utils@0.8.6',
@@ -422,7 +477,7 @@ class IntegrationTests(unittest.TestCase):
 
     another_expected = [self._get('GHSA-j8xg-fqg3-53r7')]
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({'package': {
             'purl': 'pkg:npm/word-wrap@1.2.2',
         }}),
@@ -430,10 +485,15 @@ class IntegrationTests(unittest.TestCase):
 
     self.assert_results_equal({'vulns': another_expected}, response.json())
 
-    expected_deb = [self._get('DLA-3203-1'), self._get('DSA-4921-1')]
+    expected_deb = [
+        self._get('CVE-2009-4487'),
+        self._get('CVE-2013-0337'),
+        self._get('DLA-3203-1'),
+        self._get('DSA-4921-1')
+    ]
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps(
             {'package': {
                 'purl': 'pkg:deb/debian/nginx@1.14.2-2+deb10u3',
@@ -444,7 +504,7 @@ class IntegrationTests(unittest.TestCase):
 
     # Source arch should return the same as above
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl': 'pkg:deb/debian/nginx@1.14.2-2+deb10u3?arch=source',
@@ -456,7 +516,7 @@ class IntegrationTests(unittest.TestCase):
 
     # A non source arch should also return the same item
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl': 'pkg:deb/debian/nginx@1.14.2-2+deb10u3?arch=x64',
@@ -468,7 +528,7 @@ class IntegrationTests(unittest.TestCase):
 
     # A non arch qualifier should be ignored
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl': ('pkg:deb/debian/nginx@1.14.2-2+deb10u3?'
@@ -478,6 +538,105 @@ class IntegrationTests(unittest.TestCase):
         timeout=_TIMEOUT)
 
     self.assert_results_equal({'vulns': expected_deb}, response.json())
+
+  def test_query_purl_with_version_trailing_zeroes(self):
+    """Test purl with trailing zeroes in version."""
+    expected = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:pypi/cryptography@3.1',
+        }}),
+        timeout=_TIMEOUT)
+
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:pypi/cryptography@3.1.0',
+        }}),
+        timeout=_TIMEOUT)
+
+    self.assert_results_equal(expected.json(), response.json())
+
+    expected = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:nuget/SkiaSharp@2.80.3',
+        }}),
+        timeout=_TIMEOUT)
+
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:nuget/SkiaSharp@2.80.3.0',
+        }}),
+        timeout=_TIMEOUT)
+
+    self.assert_results_equal(expected.json(), response.json())
+
+    expected = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:pypi/django@4.2',
+        }}),
+        timeout=_TIMEOUT)
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({'package': {
+            'purl': 'pkg:pypi/django@4.2.0',
+        }}),
+        timeout=_TIMEOUT)
+
+    self.assert_results_equal(expected.json(), response.json())
+
+  def test_query_with_redundant_ecosystem(self):
+    """Test purl with redundant ecosystem raises error"""
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({
+            "package": {
+                "ecosystem": "PyPI",
+                "purl": "pkg:pypi/mlflow@0.4.0",
+            }
+        }),
+        timeout=_TIMEOUT)
+    self.assert_results_equal(
+        {
+            'code': 3,
+            'message': 'ecosystem specified in a purl query'
+        }, response.json())
+
+  def test_query_with_redundant_version(self):
+    """Test purl with redundant version raises error"""
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps({
+            "version": "0.4.0",
+            "package": {
+                "purl": "pkg:pypi/mlflow@0.4.0",
+            }
+        }),
+        timeout=_TIMEOUT)
+    self.assert_results_equal(
+        {
+            'code': 3,
+            'message': 'version specified in params and purl query'
+        }, response.json())
+
+  def test_query_with_redundant_package_name(self):
+    """Test purl with redundant name raises error"""
+    response = requests.post(
+        _api() + _BASE_QUERY,
+        data=json.dumps(
+            {"package": {
+                "name": "mlflow",
+                "purl": "pkg:pypi/mlflow@0.4.0",
+            }}),
+        timeout=_TIMEOUT)
+    self.assert_results_equal(
+        {
+            'code': 3,
+            'message': 'name specified in a purl query'
+        }, response.json())
 
   def test_query_batch(self):
     """Test batch query."""
@@ -514,6 +673,60 @@ class IntegrationTests(unittest.TestCase):
                 {},
                 {
                     'vulns': [{
+                        'id': 'CVE-2020-15866',
+                    }, {
+                        'id': 'CVE-2020-36401',
+                    }, {
+                        'id': 'CVE-2021-4110',
+                    }, {
+                        'id': 'CVE-2021-4188',
+                    }, {
+                        'id': 'CVE-2021-46020',
+                    }, {
+                        'id': 'CVE-2021-46023',
+                    }, {
+                        'id': 'CVE-2022-0080',
+                    }, {
+                        'id': 'CVE-2022-0240',
+                    }, {
+                        'id': 'CVE-2022-0326',
+                    }, {
+                        'id': 'CVE-2022-0481',
+                    }, {
+                        'id': 'CVE-2022-0525',
+                    }, {
+                        'id': 'CVE-2022-0570',
+                    }, {
+                        'id': 'CVE-2022-0614',
+                    }, {
+                        'id': 'CVE-2022-0623',
+                    }, {
+                        'id': 'CVE-2022-0630',
+                    }, {
+                        'id': 'CVE-2022-0631',
+                    }, {
+                        'id': 'CVE-2022-0632',
+                    }, {
+                        'id': 'CVE-2022-0717',
+                    }, {
+                        'id': 'CVE-2022-0890',
+                    }, {
+                        'id': 'CVE-2022-1071',
+                    }, {
+                        'id': 'CVE-2022-1106',
+                    }, {
+                        'id': 'CVE-2022-1201',
+                    }, {
+                        'id': 'CVE-2022-1212',
+                    }, {
+                        'id': 'CVE-2022-1276',
+                    }, {
+                        'id': 'CVE-2022-1286',
+                    }, {
+                        'id': 'CVE-2022-1427',
+                    }, {
+                        'id': 'CVE-2022-1934',
+                    }, {
                         'id': 'OSV-2020-744',
                     }]
                 },
@@ -525,7 +738,7 @@ class IntegrationTests(unittest.TestCase):
   def test_query_pagination(self):
     """Test query by package."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps(
             {'package': {
                 'ecosystem': 'PyPI',
@@ -538,7 +751,7 @@ class IntegrationTests(unittest.TestCase):
     self.assertIn('next_page_token', result)
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'ecosystem': 'PyPI',
@@ -558,7 +771,7 @@ class IntegrationTests(unittest.TestCase):
   def test_query_package_purl(self):
     """Test query by package (purl)."""
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({'package': {
             'purl': 'pkg:pypi/tensorflow',
         }}),
@@ -568,7 +781,7 @@ class IntegrationTests(unittest.TestCase):
     self.assertIn('next_page_token', result)
 
     response = requests.post(
-        _api() + '/v1/query',
+        _api() + _BASE_QUERY,
         data=json.dumps({
             'package': {
                 'purl': 'pkg:pypi/tensorflow',
@@ -581,6 +794,91 @@ class IntegrationTests(unittest.TestCase):
     vulns_second = set(v['id'] for v in result['vulns'])
 
     self.assertEqual(set(), vulns_first.intersection(vulns_second))
+
+  @unittest.skipUnless(
+      _LONG_TESTS, "Takes around 45 seconds running locally," +
+      "enable when making a big change")
+  def test_all_possible_queries(self):
+    """Test all combinations of valid and invalid queries"""
+    semver_package = {'package': {'purl': 'pkg:cargo/crossbeam-utils'}}
+
+    semver_package_with_version = {
+        'package': {
+            'purl': 'pkg:cargo/crossbeam-utils@0.8.5'
+        }
+    }
+
+    nonsemver_package = {'package': {'purl': 'pkg:pypi/numpy'}}
+
+    nonsemver_package_with_version = {
+        'package': {
+            'purl': 'pkg:pypi/numpy@8.24.0'
+        }
+    }
+
+    pkg_ecosystem = [{'package': {'ecosystem': 'crates.io'}}, {}]
+
+    pkg_name = [{
+        'package': {
+            'name': 'crossbeam-utils'
+        }
+    }, {
+        'package': {
+            'name': 'numpy'
+        }
+    }, {}]
+
+    pkg_version = [{'package': {'version': '0.8.5'}}, {}]
+
+    commit = [{'commit': 'd374094d8c49b6b7d288f307e11217ec5a502391'}, {}]
+
+    purl_fields = [
+        semver_package, semver_package_with_version, nonsemver_package,
+        nonsemver_package_with_version, {}
+    ]
+
+    product = itertools.product(purl_fields, commit, pkg_version, pkg_name,
+                                pkg_ecosystem)
+
+    # itertools.product will produce duplicates, use set over the json to de-dup
+    combined_product = set()
+    for elem in product:
+      # Deep copy elem required since merge merges
+      # in-place to the first argument
+      elem = copy.deepcopy(elem)
+      functools.reduce(merge, elem)
+      combined_product.add(json.dumps(elem[0], sort_keys=True))
+
+    self.assertEqual(len(combined_product), 120)
+
+    actual_lines = []
+    for query in sorted(list(combined_product)):
+      response = requests.post(
+          _api() + _BASE_QUERY, data=query, timeout=_TIMEOUT)
+
+      # No possible queries should cause a server error
+      self.assertLess(response.status_code, 500)
+      actual_lines.append(str(response.status_code) + ':' + query + '\n')
+
+    self.expect_lines_equal('api_query_response', actual_lines)
+
+
+# From: https://stackoverflow.com/questions/7204805/how-to-merge-dictionaries-of-dictionaries  # pylint: disable=line-too-long
+def merge(a: dict, b: dict, path=None):
+  """Merge two nested dictionaries"""
+  if path is None:
+    path = []
+
+  for key in b:
+    if key in a:
+      if isinstance(a[key], dict) and isinstance(b[key], dict):
+        merge(a[key], b[key], path + [str(key)])
+      elif a[key] != b[key]:
+        # pylint: disable=broad-exception-raised
+        raise Exception('Conflict at ' + '.'.join(path + [str(key)]))
+    else:
+      a[key] = b[key]
+  return a
 
 
 def print_logs(filename):

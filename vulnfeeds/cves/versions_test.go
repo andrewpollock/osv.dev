@@ -2,6 +2,7 @@ package cves
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"reflect"
@@ -10,21 +11,24 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// Helper function to load in a specific CVE from sample data.
-func loadTestData(CVEID string) CVEItem {
-	file, err := os.Open("../test_data/nvdcve-1.1-test-data.json")
+func loadTestData2(cveName string) Vulnerability {
+	fileName := fmt.Sprintf("../test_data/nvdcve-2.0/%s.json", cveName)
+	file, err := os.Open(fileName)
 	if err != nil {
-		log.Fatalf("Failed to load test data")
+		log.Fatalf("Failed to load test data from %q", fileName)
 	}
-	var nvdCves NVDCVE
-	json.NewDecoder(file).Decode(&nvdCves)
-	for _, item := range nvdCves.CVEItems {
-		if item.CVE.CVEDataMeta.ID == CVEID {
-			return item
+	var nvdCves CVEAPIJSON20Schema
+	err = json.NewDecoder(file).Decode(&nvdCves)
+	if err != nil {
+		log.Fatalf("Failed to decode %q: %+v", fileName, err)
+	}
+	for _, vulnerability := range nvdCves.Vulnerabilities {
+		if string(vulnerability.CVE.ID) == cveName {
+			return vulnerability
 		}
 	}
-	log.Fatalf("test data doesn't contain specified %q", CVEID)
-	return CVEItem{}
+	log.Fatalf("test data doesn't contain %q", cveName)
+	return Vulnerability{}
 }
 
 func TestParseCPE(t *testing.T) {
@@ -191,6 +195,12 @@ func TestRepo(t *testing.T) {
 			expectedOk:      true,
 		},
 		{
+			description:     "Freedesktop GitLab commit URL observed in CVE-2022-46285",
+			inputLink:       "https://gitlab.freedesktop.org/xorg/lib/libxpm/-/commit/a3a7c6dcc3b629d7650148",
+			expectedRepoURL: "https://gitlab.freedesktop.org/xorg/lib/libxpm",
+			expectedOk:      true,
+		},
+		{
 			description:     "Freedesktop cGit mirror",
 			inputLink:       "https://cgit.freedesktop.org/xorg/lib/libXRes/commit/?id=c05c6d918b0e2011d4bfa370c321482e34630b17",
 			expectedRepoURL: "https://gitlab.freedesktop.org/xorg/lib/libXRes",
@@ -209,13 +219,15 @@ func TestRepo(t *testing.T) {
 			expectedOk:      true,
 		},
 		{
-			description: "cGit cgi-bin URL",
-			inputLink:   "https://git.gnupg.org/cgi-bin/gitweb.cgi?p=libksba.git;a=commit;h=f61a5ea4e0f6a80fd4b28ef0174bee77793cf070",
-			// Note to future selves: this isn't valid for this
-			// host, but we have no way of knowing this via purely
-			// URL mangling, so are probably going to need a
-			// mapping table for known odd cases
-			expectedRepoURL: "https://git.gnupg.org/libksba.git",
+			description:     "GitWeb URL, remapped to something cloneable (CVE-2022-47629)",
+			inputLink:       "https://git.gnupg.org/cgi-bin/gitweb.cgi?p=libksba.git;a=commit;h=f61a5ea4e0f6a80fd4b28ef0174bee77793cf070",
+			expectedRepoURL: "git://git.gnupg.org/libksba.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "GitWeb URL, remapped to something cloneable (CVE-2023-1579)",
+			inputLink:       "https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;h=11d171f1910b508a81d21faa087ad1af573407d8",
+			expectedRepoURL: "https://sourceware.org/git/binutils-gdb.git",
 			expectedOk:      true,
 		},
 		{
@@ -265,12 +277,6 @@ func TestRepo(t *testing.T) {
 			inputLink:       "https://bitbucket.org/snakeyaml/snakeyaml/issues/566",
 			expectedRepoURL: "https://bitbucket.org/snakeyaml/snakeyaml",
 			expectedOk:      true,
-		},
-		{
-			description:     "Valid URL but not wanted (by denylist)",
-			inputLink:       "https://github.com/orangecertcc/security-research/security/advisories/GHSA-px2c-q384-5wxc",
-			expectedRepoURL: "",
-			expectedOk:      false,
 		},
 		{
 			description:     "Valid URL but not wanted (by deny regexp)",
@@ -380,6 +386,54 @@ func TestRepo(t *testing.T) {
 			expectedRepoURL: "https://gitlab.com/ubports/development/core/click",
 			expectedOk:      true,
 		},
+		{
+			description:     "cGit URL on git.kernel.org remapped to be cloneable",
+			inputLink:       "https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=ee1fee900537b5d9560e9f937402de5ddc8412f3",
+			expectedRepoURL: "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "Valid Gitweb repo",
+			inputLink:       "https://git.ffmpeg.org/gitweb/ffmpeg.git/commitdiff/c94875471e3ba3dc396c6919ff3ec9b14539cd71",
+			expectedRepoURL: "https://git.ffmpeg.org/ffmpeg.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "Undesired researcher repo (by deny regex)",
+			inputLink:       "https://github.com/bigzooooz/CVE-2023-26692#readme",
+			expectedRepoURL: "",
+			expectedOk:      false,
+		},
+		{
+			description:     "GNU glibc GitWeb repo (with no distinguishing marks)",
+			inputLink:       "https://sourceware.org/git/?p=glibc.git",
+			expectedRepoURL: "https://sourceware.org/git/glibc.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "GNU glibc GitWeb repo (with distinguishing marks)",
+			inputLink:       "https://sourceware.org/git/gitweb.cgi?p=glibc.git",
+			expectedRepoURL: "https://sourceware.org/git/glibc.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "GnuPG GitWeb repo that doesn't talk https",
+			inputLink:       "https://git.gnupg.org/cgi-bin/gitweb.cgi?p=libksba.git;a=commit;h=f61a5ea4e0f6a80fd4b28ef0174bee77793cf070",
+			expectedRepoURL: "git://git.gnupg.org/libksba.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "high profile repo encountered on CVE-2024-3094",
+			inputLink:       "https://git.tukaani.org/?p=xz.git;a=tags",
+			expectedRepoURL: "https://git.tukaani.org/xz.git",
+			expectedOk:      true,
+		},
+		{
+			description:     "PostgreSQL repo",
+			inputLink:       "https://git.postgresql.org/gitweb/?p=postgresql.git;a=summary",
+			expectedRepoURL: "https://git.postgresql.org/git/postgresql.git",
+			expectedOk:      true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -406,17 +460,48 @@ func TestExtractGitCommit(t *testing.T) {
 			inputLink:       "https://github.com/google/osv/commit/cd4e934d0527e5010e373e7fed54ef5daefba2f5",
 			inputCommitType: Fixed,
 			expectedAffectedCommit: AffectedCommit{
-				Repo:  "https://github.com/google/osv",
+				Repo:  "https://github.com/google/osv.dev",
 				Fixed: "cd4e934d0527e5010e373e7fed54ef5daefba2f5",
 			},
 		},
 		{
-			description:     "Valid GitLab commit URL",
-			inputLink:       "https://gitlab.freedesktop.org/virgl/virglrenderer/-/commit/b05bb61f454eeb8a85164c8a31510aeb9d79129c",
+			description:     "Undesired GitHub commit URL", // TODO(apollock): be able to parse this a a LastAffected commit
+			inputLink:       "https://github.com/Budibase/budibase/commits/develop?after=93d6939466aec192043d8ac842e754f65fdf2e8a+594\u0026branch=develop\u0026qualified_name=refs%2Fheads%2Fdevelop",
+			inputCommitType: Fixed,
+			expectFailure:   true,
+		},
+		{
+			description:     "Valid GitHub commit URL with .patch extension",
+			inputLink:       "https://github.com/pimcore/customer-data-framework/commit/e3f333391582d9309115e6b94e875367d0ea7163.patch",
 			inputCommitType: Fixed,
 			expectedAffectedCommit: AffectedCommit{
-				Repo:  "https://gitlab.freedesktop.org/virgl/virglrenderer",
-				Fixed: "b05bb61f454eeb8a85164c8a31510aeb9d79129c",
+				Repo:  "https://github.com/pimcore/customer-data-framework",
+				Fixed: "e3f333391582d9309115e6b94e875367d0ea7163",
+			},
+		},
+		{
+			description:     "Undesired GitHub PR commit URL",
+			inputLink:       "https://github.com/OpenZeppelin/cairo-contracts/pull/542/commits/6d4cb750478fca2fd916f73297632f899aca9299",
+			inputCommitType: Fixed,
+			expectFailure:   true,
+		},
+		// Skips this test as "https://gitlab.freedesktop.org" is currently under maintenance.
+		// {
+		// 	description:     "Valid GitLab commit URL",
+		// 	inputLink:       "https://gitlab.freedesktop.org/virgl/virglrenderer/-/commit/b05bb61f454eeb8a85164c8a31510aeb9d79129c",
+		// 	inputCommitType: Fixed,
+		// 	expectedAffectedCommit: AffectedCommit{
+		// 		Repo:  "https://gitlab.freedesktop.org/virgl/virglrenderer",
+		// 		Fixed: "b05bb61f454eeb8a85164c8a31510aeb9d79129c",
+		// 	},
+		// },
+		{
+			description:     "Valid GitLab commit URL with .patch extension",
+			inputLink:       "https://gitlab.com/muttmua/mutt/-/commit/452ee330e094bfc7c9a68555e5152b1826534555.patch",
+			inputCommitType: Fixed,
+			expectedAffectedCommit: AffectedCommit{
+				Repo:  "https://gitlab.com/muttmua/mutt",
+				Fixed: "452ee330e094bfc7c9a68555e5152b1826534555",
 			},
 		},
 		{
@@ -439,11 +524,11 @@ func TestExtractGitCommit(t *testing.T) {
 		},
 		{
 			description:     "Valid bitbucket.org commit URL with trailing slash",
-			inputLink:       "https://bitbucket.org/jespern/django-piston/commits/91bdaec89543/",
+			inputLink:       "https://bitbucket.org/utmandrew/pcrs/commits/5f18bcb/",
 			inputCommitType: Fixed,
 			expectedAffectedCommit: AffectedCommit{
-				Repo:  "https://bitbucket.org/jespern/django-piston",
-				Fixed: "91bdaec89543",
+				Repo:  "https://bitbucket.org/utmandrew/pcrs",
+				Fixed: "5f18bcb",
 			},
 		},
 		{
@@ -460,7 +545,7 @@ func TestExtractGitCommit(t *testing.T) {
 			inputLink:       "https://git.gnupg.org/cgi-bin/gitweb.cgi?p=libksba.git;a=commit;h=f61a5ea4e0f6a80fd4b28ef0174bee77793cf070",
 			inputCommitType: Fixed,
 			expectedAffectedCommit: AffectedCommit{
-				Repo:  "https://git.gnupg.org/libksba.git",
+				Repo:  "git://git.gnupg.org/libksba.git",
 				Fixed: "f61a5ea4e0f6a80fd4b28ef0174bee77793cf070",
 			},
 		},
@@ -485,12 +570,51 @@ func TestExtractGitCommit(t *testing.T) {
 			expectedAffectedCommit: AffectedCommit{},
 			expectFailure:          true,
 		},
+		{
+			description:     "cGit reference from CVE-2022-30594, remapped to be cloneable",
+			inputLink:       "https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=ee1fee900537b5d9560e9f937402de5ddc8412f3",
+			inputCommitType: Fixed,
+			expectedAffectedCommit: AffectedCommit{
+				Repo:  "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
+				Fixed: "ee1fee900537b5d9560e9f937402de5ddc8412f3",
+			},
+		},
+		{
+			description:     "Valid GitWeb commit URL",
+			inputLink:       "https://git.ffmpeg.org/gitweb/ffmpeg.git/commitdiff/c94875471e3ba3dc396c6919ff3ec9b14539cd71",
+			inputCommitType: Fixed,
+			expectedAffectedCommit: AffectedCommit{
+				Repo:  "https://git.ffmpeg.org/ffmpeg.git",
+				Fixed: "c94875471e3ba3dc396c6919ff3ec9b14539cd71",
+			},
+		},
+		{
+			description:     "A GitHub repo that has been renamed (as seen on CVE-2016-10544)",
+			inputLink:       "https://github.com/uWebSockets/uWebSockets/commit/37deefd01f0875e133ea967122e3a5e421b8fcd9",
+			inputCommitType: Fixed,
+			expectedAffectedCommit: AffectedCommit{
+				Repo:  "https://github.com/unetworking/uwebsockets",
+				Fixed: "37deefd01f0875e133ea967122e3a5e421b8fcd9",
+			},
+		},
+		{
+			description:     "A GitHub repo that should be working (as seen on CVE-2021-23568)",
+			inputLink:       "https://github.com/eggjs/extend2/commit/aa332a59116c8398976434b57ea477c6823054f8",
+			inputCommitType: Fixed,
+			expectedAffectedCommit: AffectedCommit{
+				Repo:  "https://github.com/eggjs/extend2",
+				Fixed: "aa332a59116c8398976434b57ea477c6823054f8",
+			},
+		},
 	}
 
 	for _, tc := range tests {
 		got, err := extractGitCommit(tc.inputLink, tc.inputCommitType)
 		if err != nil && !tc.expectFailure {
 			t.Errorf("test %q: extractGitCommit for %q (%q) errored unexpectedly: %#v", tc.description, tc.inputLink, tc.inputCommitType, err)
+		}
+		if err == nil && tc.expectFailure {
+			t.Errorf("test %q: extractGitCommit for %q (%q) did not error as unexpected!", tc.description, tc.inputLink, tc.inputCommitType)
 		}
 		if !reflect.DeepEqual(got, tc.expectedAffectedCommit) {
 			t.Errorf("test %q: extractGitCommit for %q was incorrect, got: %#v, expected: %#v", tc.description, tc.inputLink, got, tc.expectedAffectedCommit)
@@ -610,21 +734,21 @@ func TestNormalizeVersion(t *testing.T) {
 func TestExtractVersionInfo(t *testing.T) {
 	tests := []struct {
 		description         string
-		inputCVEItem        CVEItem
+		inputCVEItem        Vulnerability
 		inputValidVersions  []string
 		expectedVersionInfo VersionInfo
 		expectedNotes       []string
 	}{
 		{
 			description:        "A CVE with multiple affected versions",
-			inputCVEItem:       loadTestData("CVE-2022-32746"),
+			inputCVEItem:       loadTestData2("CVE-2022-32746"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits: []AffectedCommit(nil),
 				AffectedVersions: []AffectedVersion{
 					{
-						Introduced:   "4.16.0",
-						Fixed:        "4.16.4",
+						Introduced:   "4.3.0",
+						Fixed:        "4.14.14",
 						LastAffected: "",
 					},
 					{
@@ -633,8 +757,8 @@ func TestExtractVersionInfo(t *testing.T) {
 						LastAffected: "",
 					},
 					{
-						Introduced:   "4.3.0",
-						Fixed:        "4.14.14",
+						Introduced:   "4.16.0",
+						Fixed:        "4.16.4",
 						LastAffected: "",
 					},
 				},
@@ -643,14 +767,14 @@ func TestExtractVersionInfo(t *testing.T) {
 		},
 		{
 			description:        "A CVE with duplicate affected versions squashed",
-			inputCVEItem:       loadTestData("CVE-2022-0090"),
+			inputCVEItem:       loadTestData2("CVE-2022-0090"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits: []AffectedCommit(nil),
 				AffectedVersions: []AffectedVersion{
 					{
-						Introduced:   "14.6.0",
-						Fixed:        "14.6.1",
+						Introduced:   "",
+						Fixed:        "14.4.5",
 						LastAffected: "",
 					},
 					{
@@ -659,8 +783,8 @@ func TestExtractVersionInfo(t *testing.T) {
 						LastAffected: "",
 					},
 					{
-						Introduced:   "",
-						Fixed:        "14.4.5",
+						Introduced:   "14.6.0",
+						Fixed:        "14.6.1",
 						LastAffected: "",
 					},
 				},
@@ -669,7 +793,7 @@ func TestExtractVersionInfo(t *testing.T) {
 		},
 		{
 			description:        "A CVE with no explicit versions",
-			inputCVEItem:       loadTestData("CVE-2022-1122"),
+			inputCVEItem:       loadTestData2("CVE-2022-1122"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits: []AffectedCommit(nil),
@@ -685,7 +809,7 @@ func TestExtractVersionInfo(t *testing.T) {
 		},
 		{
 			description:        "A CVE with fix commits in references and CPE match info",
-			inputCVEItem:       loadTestData("CVE-2022-25929"),
+			inputCVEItem:       loadTestData2("CVE-2022-25929"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits: []AffectedCommit{
@@ -706,7 +830,7 @@ func TestExtractVersionInfo(t *testing.T) {
 		},
 		{
 			description:        "A CVE with fix commits in references and (more complex) CPE match info",
-			inputCVEItem:       loadTestData("CVE-2022-29194"),
+			inputCVEItem:       loadTestData2("CVE-2022-29194"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits: []AffectedCommit{
@@ -717,13 +841,13 @@ func TestExtractVersionInfo(t *testing.T) {
 				},
 				AffectedVersions: []AffectedVersion{
 					{
-						Introduced:   "2.7.0",
-						Fixed:        "2.7.2",
+						Introduced:   "",
+						Fixed:        "2.6.4",
 						LastAffected: "",
 					},
 					{
-						Introduced:   "",
-						Fixed:        "2.6.4",
+						Introduced:   "2.7.0",
+						Fixed:        "2.7.2",
 						LastAffected: "",
 					},
 					{
@@ -731,28 +855,13 @@ func TestExtractVersionInfo(t *testing.T) {
 						Fixed:        "2.8.1",
 						LastAffected: "",
 					},
-					{
-						Introduced:   "",
-						Fixed:        "",
-						LastAffected: "2.9.0-rc1",
-					},
-					{
-						Introduced:   "",
-						Fixed:        "",
-						LastAffected: "2.9.0-rc0",
-					},
-					{
-						Introduced:   "",
-						Fixed:        "",
-						LastAffected: "2.9.0-rc2",
-					},
 				},
 			},
 			expectedNotes: []string{},
 		},
 		{
 			description:        "A CVE with undesired wildcards and no versions",
-			inputCVEItem:       loadTestData("CVE-2022-2956"),
+			inputCVEItem:       loadTestData2("CVE-2022-2956"),
 			inputValidVersions: []string{},
 			expectedVersionInfo: VersionInfo{
 				AffectedCommits:  []AffectedCommit(nil),
@@ -760,10 +869,36 @@ func TestExtractVersionInfo(t *testing.T) {
 			},
 			expectedNotes: []string{},
 		},
+		// Skips this test as "https://gitlab.freedesktop.org" is currently under maintenance.
+		// {
+		// 	description:        "A CVE with a weird GitLab reference that breaks version enumeration in the worker",
+		// 	inputCVEItem:       loadTestData2("CVE-2022-46285"),
+		// 	inputValidVersions: []string{},
+		// 	expectedVersionInfo: VersionInfo{
+		// 		AffectedCommits:  []AffectedCommit{{Repo: "https://gitlab.freedesktop.org/xorg/lib/libxpm", Fixed: "a3a7c6dcc3b629d7650148"}},
+		// 		AffectedVersions: []AffectedVersion{{Fixed: "3.5.15"}},
+		// 	},
+		// 	expectedNotes: []string{},
+		// },
+		{
+			description:  "A CVE with a different GitWeb reference URL that was not previously being extracted successfully",
+			inputCVEItem: loadTestData2("CVE-2021-28429"),
+			expectedVersionInfo: VersionInfo{
+				AffectedCommits:  []AffectedCommit{{Repo: "https://git.ffmpeg.org/ffmpeg.git", Fixed: "c94875471e3ba3dc396c6919ff3ec9b14539cd71"}},
+				AffectedVersions: []AffectedVersion{{LastAffected: "4.3.2"}},
+			},
+		},
+		{
+			description:  "A CVE with a configuration unsupported by ExtractVersionInfo and a limit version in the description",
+			inputCVEItem: loadTestData2("CVE-2020-13595"),
+			expectedVersionInfo: VersionInfo{
+				AffectedVersions: []AffectedVersion{{Introduced: "4.0.0", LastAffected: "4.2"}},
+			},
+		},
 	}
 
 	for _, tc := range tests {
-		gotVersionInfo, _ := ExtractVersionInfo(tc.inputCVEItem, tc.inputValidVersions)
+		gotVersionInfo, _ := ExtractVersionInfo(tc.inputCVEItem.CVE, tc.inputValidVersions)
 		if diff := cmp.Diff(tc.expectedVersionInfo, gotVersionInfo); diff != "" {
 			t.Errorf("test %q: VersionInfo for %#v was incorrect: %s", tc.description, tc.inputCVEItem, diff)
 		}
@@ -773,25 +908,128 @@ func TestExtractVersionInfo(t *testing.T) {
 func TestCPEs(t *testing.T) {
 	tests := []struct {
 		description  string
-		inputCVEItem CVEItem
+		inputCVEItem Vulnerability
 		expectedCPEs []string
 	}{
 		{
 			description:  "A CVE with child CPEs",
-			inputCVEItem: loadTestData("CVE-2023-24256"),
+			inputCVEItem: loadTestData2("CVE-2023-24256"),
 			expectedCPEs: []string{"cpe:2.3:o:nio:aspen:*:*:*:*:*:*:*:*", "cpe:2.3:h:nio:ec6:-:*:*:*:*:*:*:*"},
 		},
 		{
 			description:  "A CVE without child CPEs",
-			inputCVEItem: loadTestData("CVE-2022-33745"),
-			expectedCPEs: []string{"cpe:2.3:o:xen:xen:*:*:*:*:*:*:x86:*", "cpe:2.3:o:fedoraproject:fedora:36:*:*:*:*:*:*:*"},
+			inputCVEItem: loadTestData2("CVE-2022-33745"),
+			expectedCPEs: []string{"cpe:2.3:o:xen:xen:*:*:*:*:*:*:x86:*", "cpe:2.3:o:debian:debian_linux:11.0:*:*:*:*:*:*:*", "cpe:2.3:o:fedoraproject:fedora:35:*:*:*:*:*:*:*", "cpe:2.3:o:fedoraproject:fedora:36:*:*:*:*:*:*:*"},
 		},
 	}
 
 	for _, tc := range tests {
-		gotCPEs := CPEs(tc.inputCVEItem)
+		gotCPEs := CPEs(tc.inputCVEItem.CVE)
 		if diff := cmp.Diff(gotCPEs, tc.expectedCPEs); diff != "" {
-			t.Errorf("test %q: CPEs for %#v were incorrect: %s", tc.description, tc.inputCVEItem.Configurations, diff)
+			t.Errorf("test %q: CPEs for %#v were incorrect: %s", tc.description, tc.inputCVEItem.CVE.Configurations, diff)
+		}
+	}
+}
+
+func TestVersionInfoDuplicateDetection(t *testing.T) {
+	tests := []struct {
+		description         string
+		inputVersionInfo    VersionInfo
+		inputAffectedCommit AffectedCommit
+		expectedResult      bool
+	}{
+		{
+			description:         "An empty VersionInfo and AffectedCommit",
+			inputVersionInfo:    VersionInfo{},
+			inputAffectedCommit: AffectedCommit{},
+			expectedResult:      false,
+		},
+		{
+			description:         "A populated VersionInfo and empty AffectedCommit",
+			inputVersionInfo:    VersionInfo{AffectedCommits: []AffectedCommit{{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"}}},
+			inputAffectedCommit: AffectedCommit{},
+			expectedResult:      false,
+		},
+		{
+			description:         "An empty VersionInfo and a populated AffectedCommit",
+			inputVersionInfo:    VersionInfo{},
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      false,
+		},
+		{
+			description:         "A bonafide full duplicate",
+			inputVersionInfo:    VersionInfo{AffectedCommits: []AffectedCommit{{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"}}},
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      true,
+		},
+		{
+			description:         "Duplication across introduced and fixed",
+			inputVersionInfo:    VersionInfo{AffectedCommits: []AffectedCommit{{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"}}},
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		result := tc.inputVersionInfo.Duplicated(tc.inputAffectedCommit)
+		if diff := cmp.Diff(result, tc.expectedResult); diff != "" {
+			t.Errorf("test %q: HasDuplicateAffectedVersions for %#v was incorrect: %s", tc.description, tc.inputVersionInfo, diff)
+		}
+	}
+}
+
+func TestInvalidRangeDetection(t *testing.T) {
+	tests := []struct {
+		description         string
+		inputAffectedCommit AffectedCommit
+		expectedResult      bool
+	}{
+		{
+			description:         "An empty AffectedCommit",
+			inputAffectedCommit: AffectedCommit{},
+			expectedResult:      false,
+		},
+		{
+			description:         "Only an introduced commit",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      false,
+		},
+		{
+			description:         "Only a fixed commit",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      false,
+		},
+		{
+			description:         "Only a last_affected commit",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", LastAffected: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      false,
+		},
+		{
+			description:         "Non-overlapping introduced and fixed range",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "b48ff2aa1e57e761fa0825e3dc78105a0d016e16"},
+			expectedResult:      false,
+		},
+		{
+			description:         "Non-overlapping introduced and last_affected range",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", LastAffected: "b48ff2aa1e57e761fa0825e3dc78105a0d016e16"},
+			expectedResult:      false,
+		},
+		{
+			description:         "Overlapping introduced and fixed range",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", Fixed: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      true,
+		},
+		{
+			description:         "Overlapping introduced and last_affected range",
+			inputAffectedCommit: AffectedCommit{Repo: "https://github.com/foo/bar", Introduced: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7", LastAffected: "4089bd6080d41450adab1e0ac0d63cfeab4a78e7"},
+			expectedResult:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		result := tc.inputAffectedCommit.InvalidRange()
+		if diff := cmp.Diff(result, tc.expectedResult); diff != "" {
+			t.Errorf("test %q: Duplicated() for %#v was incorrect: %s", tc.description, tc.inputAffectedCommit, diff)
 		}
 	}
 }
