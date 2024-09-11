@@ -204,18 +204,6 @@
   link: 'https://github.com/ossf/malicious-packages/blob/main/'
   editable: False
 
-- name: 'test-oss-fuzz'
-  versions_from_repo: True
-  type: 0
-  ignore_patterns: ['^(?!OSV-).*$']
-  directory_path: 'vulns'
-  repo_url: 'ssh://github.com/google/oss-fuzz-vulns'
-  detect_cherrypicks: True
-  db_prefix: ['OSV-']
-  ignore_git: False
-  link: 'https://github.com/google/oss-fuzz-vulns/blob/main/'
-  editable: False
-
 - name: 'psf'
   versions_from_repo: True
   type: 0
