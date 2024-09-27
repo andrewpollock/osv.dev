@@ -43,6 +43,8 @@
             let CVEID = document.querySelector("input[name='CVEID']").value;
             let environment = document.querySelector("input[name='environment']:checked").value;
 
+            document.querySelector("iframe[name='cvelist_source']").src = "https://cveawg.mitre.org/api/cve/" + CVEID;
+            document.querySelector('p[name="cvelist_source"]').innerHTML = '<a href="' + document.querySelector('iframe[name="cvelist_source"]').src + '" target="_blank" rel="noopener noreferrer">' + document.querySelector("input[name='CVEID']").value + '</a> in the CVE List'
             document.querySelector("iframe[name='nvd_source']").src = "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=" + CVEID;
             document.querySelector('p[name="nvd_source"]').innerHTML = '<a href="' + document.querySelector('iframe[name="nvd_source"]').src + '" target="_blank" rel="noopener noreferrer">' + document.querySelector("input[name='CVEID']").value + '</a> in the NVD'
             switch (environment) {
@@ -100,6 +102,10 @@
         </table>
     </header>
     <section>
+        <article>
+            <p name="cvelist_source"></p>
+            <iframe title="The CVE List source record" name="cvelist_source"></iframe>
+        </article>
         <article>
             <p name="nvd_source"></p>
             <iframe title="The NVD source record" name="nvd_source"></iframe>
