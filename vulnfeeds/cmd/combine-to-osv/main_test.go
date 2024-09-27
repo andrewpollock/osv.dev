@@ -36,7 +36,7 @@ func loadTestData2(cveName string) cves.Vulnerability {
 
 func TestLoadParts(t *testing.T) {
 	allParts, _ := loadParts("../../test_data/parts")
-	expectedPartCount := 14
+	expectedPartCount := 15
 	actualPartCount := len(allParts)
 
 	if actualPartCount != expectedPartCount {
@@ -101,6 +101,32 @@ func TestCombineIntoOSV(t *testing.T) {
 	for cve := range cveStuff {
 		if len(combinedOSV[cve].Affected) != len(allParts[cve]) {
 			t.Errorf("Affected lengths for %s do not match", cve)
+		}
+		found := false
+		if cve == "CVE-2018-1000500" {
+			for _, reference := range combinedOSV[cve].References {
+				if reference.Type == "ADVISORY" &&
+					reference.URL == "https://security-tracker.debian.org/tracker/CVE-2018-1000500" {
+					found = true
+				}
+			}
+		} else if cve == "CVE-2022-33745" {
+			for _, reference := range combinedOSV[cve].References {
+				if reference.Type == "ADVISORY" &&
+					reference.URL == "https://security.alpinelinux.org/vuln/CVE-2022-33745" {
+					found = true
+				}
+			}
+		} else if cve == "CVE-2022-32746" {
+			for _, reference := range combinedOSV[cve].References {
+				if reference.Type == "ADVISORY" &&
+					reference.URL == "https://security.alpinelinux.org/vuln/CVE-2022-32746" {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s doesn't have all expected references", cve)
 		}
 	}
 }

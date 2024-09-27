@@ -16,7 +16,7 @@ module "osv_test" {
 
   website_domain = "test.osv.dev"
   api_url        = "api.test.osv.dev"
-  esp_version    = "2.47.0"
+  esp_version    = "2.49.0"
 }
 
 import {
@@ -39,11 +39,11 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.27.0"
+      version = "~> 5.44.0"
     }
     google-beta = {
       source  = "hashicorp/google-beta"
-      version = "~> 5.27.0"
+      version = "~> 5.44.0"
     }
     external = {
       source  = "hashicorp/external"

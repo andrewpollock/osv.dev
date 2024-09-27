@@ -19,7 +19,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='osv',
-    version='0.0.21',
+    version='0.0.22',
     author='OSV authors',
     author_email='osv-discuss@googlegroups.com',
     description='Open Source Vulnerabilities library',
@@ -33,7 +33,7 @@ setuptools.setup(
         'Operating System :: OS Independent',
     ],
     install_requires=[
-        # TODO(ochang): Get this from the Pipfile.
+        # TODO(rexpan): Migrate to using pyproject.toml directly.
         'google-cloud-ndb',
         'google-cloud-logging',
         'pygit2>=1.14.0',

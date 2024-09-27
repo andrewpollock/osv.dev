@@ -31,23 +31,41 @@ class UnexpectedSituation(Exception):
   pass
 
 
-def objname_for_bug(client: datastore.Client,
-                    bug: datastore.entity.Entity) -> dict:
+def objname_for_bug(client: datastore.Client, bug: datastore.entity.Entity,
+                    forced_bucket_name: str) -> dict:
   """Returns the GCS object details for a given Bug.
 
   Args:
       client: an initialized Cloud Datastore client.
       bug: a Bug Cloud Datastore entity.
+      forced_bucket_name: bucket name (with optional colon-separated path) to
+      forcibly use.
 
   Returns:
     A dict with keys for the GCS uri, the bucket name and path within the
     bucket.
   """
+  source_object_path = bug["source_id"].split(":")[1]
+
+  if forced_bucket_name:
+    (bucket, _, bucketpath) = forced_bucket_name.partition(":")
+    # The assumption is that when passed a different bucket path, only the
+    # current object's base filename is relevant.
+    return {
+        "uri":
+            "gs://" + os.path.join(bucket, bucketpath,
+                                   os.path.basename(source_object_path)),
+        "bucket":
+            bucket,
+        "path":
+            os.path.join(bucketpath, os.path.basename(source_object_path))
+    }
+
   bucket = bucket_for_source(client, bug["source"])
   return {
-      "uri": "gs://" + os.path.join(bucket, bug["source_id"].split(":")[1]),
+      "uri": "gs://" + os.path.join(bucket, source_object_path),
       "bucket": bucket,
-      "path": bug["source_id"].split(":")[1]
+      "path": source_object_path
   }
 
 
@@ -96,26 +114,19 @@ def bucket_for_source(client: datastore.Client, source: str) -> str:
   return result[0]['bucket']
 
 
-def reset_object_creation(bucket_name: str,
-                          blob_name: str,
-                          tmpdir="/tmp") -> None:
+def reset_object_modification(bucket_name: str, blob_name: str) -> None:
   """Resets a GCS object's creation time.
 
-  Copies the object locally and uploads it again.
+  Makes a no-op patch ("gcloud object storage objects update" equivalent)
 
   Args:
     bucket_name: the name of the GCS bucket.
     blob_name: the name of the object in the bucket.
-    tmpdir: a preexisting directory in the local filesystem to copy the object
-    to/from.
   """
-  local_tmp_file = os.path.join(tmpdir, os.path.basename(blob_name))
   gcs_client = storage.Client()
   bucket = gcs_client.bucket(bucket_name)
   blob = bucket.blob(blob_name)
-  blob.download_to_filename(local_tmp_file)
-  blob.upload_from_filename(local_tmp_file, retry=retry.DEFAULT_RETRY)
-  os.unlink(local_tmp_file)
+  blob.patch(retry=retry.DEFAULT_RETRY)
 
 
 def main() -> None:
@@ -150,6 +161,13 @@ def main() -> None:
       dest="tmpdir",
       default="/tmp",
       help="Local directory to copy to from GCS")
+  parser.add_argument(
+      "--bucket",
+      action="store",
+      dest="bucket",
+      default=None,
+      help=("Override the bucket name (and with a colon + path, the path) "
+            "for the object in GCS (e.g. `cve-osv-conversion:osv-output`)"))
   args = parser.parse_args()
 
   if len(args.bugs[0]) > MAX_QUERY_SIZE:
@@ -171,13 +189,18 @@ def main() -> None:
   try:
     with ds_client.transaction() as xact:
       for bug in result_to_fix:
-        bug_in_gcs = objname_for_bug(ds_client, bug)
+        try:
+          bug_in_gcs = objname_for_bug(
+              ds_client, bug, forced_bucket_name=args.bucket)
+        except UnexpectedSituation as e:
+          if args.verbose:
+            print(f"Skipping {bug['db_id']}, got {e}\n")
+          continue
         if args.verbose:
-          print(f"Resetting creation time for {bug_in_gcs['uri']}")
+          print(f"Resetting modification time for {bug_in_gcs['uri']}")
         if not args.dryrun:
           try:
-            reset_object_creation(bug_in_gcs["bucket"], bug_in_gcs["path"],
-                                  args.tmpdir)
+            reset_object_modification(bug_in_gcs["bucket"], bug_in_gcs["path"])
           except NotFound as e:
             if args.verbose:
               print(f"Skipping, got {e}\n")

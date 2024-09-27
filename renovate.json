@@ -5,12 +5,17 @@
   ],
   "timezone": "Australia/Sydney",
   "schedule": ["before 6am on wednesday"],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 20,
   "labels": ["dependencies"],
   "postUpdateOptions": ["gomodTidy"],
   "osvVulnerabilityAlerts": true,
-  "lockFileMaintenance": { 
+  "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 6am on wednesday"]
+  },
+  "git-submodules": {
+    "enabled": false
   },
   "packageRules": [
     {
@@ -26,6 +31,11 @@
       "matchFileNames": ["gcp/appengine/**"],
       "matchCategories": ["js"],
       "groupName": "appengine-frontend"
+    },
+    {
+      "matchFileNames": ["gcp/api/**"],
+      "matchPackageNames": ["grpcio*"],
+      "enabled": false
     },
     {
       "matchFileNames": ["gcp/api/**"],
@@ -66,7 +76,7 @@
       "groupName": "workflows"
     },
     {
-      "matchFileNames": ["Pipfile"],
+      "matchFileNames": ["pyproject.toml"],
       "groupName": "osv-lib"
     },
     {

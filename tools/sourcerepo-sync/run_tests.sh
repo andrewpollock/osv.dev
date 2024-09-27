@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash -ex
 # Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-export PIPENV_IGNORE_VIRTUALENVS=1
-pipenv sync
-
-pipenv run python source_sync.py --kind SourceRepository --project oss-vdb --file ../../source.yaml --verbose --validate
-pipenv run python source_sync.py --kind SourceRepository --project oss-vdb-test --file ../../source_test.yaml --verbose --validate
+poetry install
+poetry run python source_sync.py --kind SourceRepository --project oss-vdb --file ../../source.yaml --verbose --validate
+poetry run python source_sync.py --kind SourceRepository --project oss-vdb-test --file ../../source_test.yaml --verbose --validate

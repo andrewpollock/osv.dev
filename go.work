@@ -1,8 +1,0 @@
-go 1.22.4
-
-use (
-	./docker/indexer
-	./tools/datastore-remover
-	./tools/indexer-api-caller
-	./vulnfeeds
-)

@@ -48,10 +48,12 @@ _PAGE_SIZE = 16
 _PAGE_LOOKAHEAD = 4
 _REQUESTS_PER_MIN = 30
 _WORD_CHARACTERS_OR_DASH = re.compile(r'^[+\w-]+$')
+_WORD_CHARACTERS_OR_DASH_OR_COLON = re.compile(r'^[+\w:-]+$')
 _VALID_BLOG_NAME = _WORD_CHARACTERS_OR_DASH
-_VALID_VULN_ID = _WORD_CHARACTERS_OR_DASH
+_VALID_VULN_ID = _WORD_CHARACTERS_OR_DASH_OR_COLON
 _BLOG_CONTENTS_DIR = 'blog'
 _DEPS_BASE_URL = 'https://deps.dev'
+_FIRST_CVSS_CALCULATOR_BASE_URL = 'https://www.first.org/cvss/calculator'
 
 if utils.is_prod():
   redis_host = os.environ.get('REDISHOST', 'localhost')
@@ -246,6 +248,8 @@ def vulnerability(vuln_id):
 @blueprint.route('/<potential_vuln_id>')
 def vulnerability_redirector(potential_vuln_id):
   """Convenience redirector for /VULN-ID to /vulnerability/VULN-ID."""
+  # AlmaLinux have colons in their identifiers, which gets URL encoded.
+  potential_vuln_id = parse.unquote(potential_vuln_id)
   if not _VALID_VULN_ID.match(potential_vuln_id):
     abort(404)
     return None
@@ -422,7 +426,8 @@ def osv_get_ecosystems():
                 key=str.lower)
 
 
-@cache.smart_cache("osv_get_ecosystem_counts", timeout=24 * 60 * 60)
+@cache.smart_cache(
+    "osv_get_ecosystem_counts", hard_timeout=24 * 60 * 60, soft_timeout=30 * 60)
 def osv_get_ecosystem_counts_cached():
   """Get count of vulnerabilities per ecosystem, cached"""
   # Check if we're already in ndb context, if not, put us in one
@@ -728,6 +733,31 @@ def link_to_deps_dev(package, ecosystem):
   # return https://deps.dev/go/github.com%2Francher%2Fwrangler
   encoded_package = parse.quote(package, safe='')
   return f"{_DEPS_BASE_URL}/{system}/{encoded_package}"
+
+
+@blueprint.app_template_filter('display_severity_rating')
+def display_severity_rating(severity: dict) -> str:
+  """Return base score and rating of the severity."""
+  severity_base_score, severity_rating = calculate_severity_details(severity)
+  return f"{severity_base_score} ({severity_rating})"
+
+
+@blueprint.app_template_filter('severity_level')
+def severity_level(severity: dict) -> str:
+  """Return rating of the severity."""
+  _, rating = calculate_severity_details(severity)
+  return rating.lower()
+
+
+@blueprint.app_template_filter('cvss_calculator_url')
+def cvss_calculator_url(severity):
+  """Generate the FIRST CVSS calculator URL from a CVSS string."""
+  score = severity.get('score')
+
+  # Extract CVSS version from the vector string
+  version = score.split('/')[0].split(':')[1]
+
+  return f"{_FIRST_CVSS_CALCULATOR_BASE_URL}/{version}#{score}"
 
 
 @blueprint.app_template_filter('relative_time')
