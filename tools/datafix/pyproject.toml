@@ -6,7 +6,8 @@ dependencies = [
     "google-cloud-storage==2.19.0",
     "pyyaml==6.0.2",
     "osv",
-    "google-cloud-pubsub>=2.25.2", 
+    "google-cloud-pubsub>=2.25.2",
+    "packageurl-python (==0.16.0)", 
 ]
 
 [tool.poetry]
